@@ -16,7 +16,7 @@ def get_youtube_thumbnail(url):
     # Extract video ID from various YouTube URL formats
     video_id = None
     patterns = [
-        r'(?:youtube\.com\/watch\?v=||youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]+)',
+        r'(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]+)',
         r'youtube\.com\/watch\?.*v=([a-zA-Z0-9_-]+)',
         r'youtu\.be\/([a-zA-Z0-9_-]+)'
     ]
@@ -172,5 +172,6 @@ def handle_thumbnail_selection(call):
 
 # ==== MAIN ====
 if __name__ == "__main__":
-    # Start Flask app
-    app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
+    # Start Flask app for production
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
