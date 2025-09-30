@@ -100,6 +100,8 @@ def handle_request():
         logger.error(f'Error: {e}')
         return jsonify({'error': 'Processing failed'}), 500
 
+# main.py ফাইলের handle_message ফাংশনে এই অংশটি যোগ করুন
+
 def handle_message(message):
     """Handle all types of messages"""
     chat_id = message.get('chat', {}).get('id')
@@ -108,6 +110,28 @@ def handle_message(message):
     
     if not chat_id:
         return jsonify({'ok': True})
+    
+    # Handle callback queries (NEW ADDITION)
+    if 'callback_query' in update:
+        callback_data = update['callback_query']['data']
+        user_info = update['callback_query']['from']
+        chat_id = update['callback_query']['message']['chat']['id']
+        message_id = update['callback_query']['message']['message_id']
+        
+        # Try to find callback handler in modules
+        for module_name in ['menu', 'form']:  # Add other modules as needed
+            try:
+                module = importlib.import_module(f'bot.handlers.{module_name}')
+                if hasattr(module, 'handle_all_callbacks'):
+                    result = module.handle_all_callbacks(callback_data, user_info, chat_id, message_id)
+                    if result:
+                        return result
+            except ImportError:
+                continue
+        
+        return jsonify(send_telegram_message(chat_id, "❌ Callback handler not found"))
+    
+    # Rest of your existing code...
     
     # Handle text messages and commands
     if 'text' in message:
