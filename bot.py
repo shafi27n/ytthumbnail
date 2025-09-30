@@ -2,7 +2,15 @@ from flask import Flask, request, jsonify
 import requests
 import re
 import os
+import logging
 from urllib.parse import urlparse, parse_qs
+
+# লগিং কনফিগারেশন
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -42,38 +50,11 @@ def extract_youtube_thumbnail(video_url):
         return thumbnails, None
         
     except Exception as e:
+        logger.error(f"Thumbnail extraction error: {e}")
         return None, f"ত্রুটি: {str(e)}"
 
-async def send_telegram_message(token, chat_id, text, parse_mode='HTML', reply_markup=None, photo_url=None):
-    """
-    টেলিগ্রামে মেসেজ বা ফটো সেন্ড করে
-    """
-    if photo_url:
-        # ফটো সেন্ড
-        message_data = {
-            'method': 'sendPhoto',
-            'chat_id': chat_id,
-            'photo': photo_url,
-            'caption': text,
-            'parse_mode': parse_mode
-        }
-    else:
-        # টেক্সট মেসেজ সেন্ড
-        message_data = {
-            'method': 'sendMessage',
-            'chat_id': chat_id,
-            'text': text,
-            'parse_mode': parse_mode,
-            'disable_web_page_preview': True
-        }
-    
-    if reply_markup:
-        message_data['reply_markup'] = reply_markup
-    
-    return message_data
-
 @app.route('/', methods=['GET', 'POST'])
-async def handle_request():
+def handle_request():
     try:
         # URL থেকে টোকেন নেওয়া
         token = request.args.get('token')
@@ -88,12 +69,16 @@ async def handle_request():
         if request.method == 'GET':
             return jsonify({
                 'status': 'বট একটিভ',
-                'instruction': 'POST request এর মাধ্যমে YouTube লিংক সেন্ড করুন'
+                'instruction': 'POST request এর মাধ্যমে YouTube লিংক সেন্ড করুন',
+                'usage': 'টেলিগ্রাম বটের ওয়েবহুক URL: https://your-domain.com/?token=YOUR_BOT_TOKEN'
             })
         
         # POST request হ্যান্ডেল
         if request.method == 'POST':
             update = request.get_json()
+            
+            if not update:
+                return jsonify({'error': 'Invalid JSON data'}), 400
             
             # মেসেজ ডেটা এক্সট্র্যাক্ট
             chat_id = None
@@ -108,6 +93,15 @@ async def handle_request():
                 chat_id = update['channel_post']['chat']['id']
                 message_text = update['channel_post'].get('text', '')
                 message_id = update['channel_post'].get('message_id')
+            elif 'callback_query' in update:
+                # Callback query হ্যান্ডেল (যদি ইনলাইন বাটন ব্যবহার করেন)
+                chat_id = update['callback_query']['message']['chat']['id']
+                message_id = update['callback_query']['message']['message_id']
+                return jsonify({
+                    'method': 'answerCallbackQuery',
+                    'callback_query_id': update['callback_query']['id'],
+                    'text': 'Processing...'
+                })
             
             if not chat_id:
                 return jsonify({'error': 'চ্যাট আইডি পাওয়া যায়নি'}), 400
@@ -195,10 +189,10 @@ https://youtu.be/dQw4w9WgXcQ
                     buttons = []
                     for quality, thumb_url in thumbnails.items():
                         buttons.append([
-                            InlineKeyboardButton(
-                                text=f"📷 {quality.upper()} কোয়ালিটি",
-                                url=thumb_url
-                            )
+                            {
+                                'text': f"📷 {quality.upper()} কোয়ালিটি",
+                                'url': thumb_url
+                            }
                         ])
                     
                     # সবগুলো থাম্বনেইল দেখানোর জন্য বাটন
@@ -210,11 +204,11 @@ https://youtu.be/dQw4w9WgXcQ
 <b>ভিডিও লিংক:</b> {message_text}
 
 <b>থাম্বনেইল গুলো:</b>
-• <b>Default</b> - ছোট সাইজ
-• <b>Medium</b> - মধ্যম কোয়ালিটি  
-• <b>High</b> - উচ্চ কোয়ালিটি
-• <b>Standard</b> - স্ট্যান্ডার্ড ডেফিনিশন
-• <b>Max Resolution</b> - সর্বোচ্চ রেজোলিউশন
+• <b>Default</b> - ছোট সাইজ (120×90)
+• <b>Medium</b> - মধ্যম কোয়ালিটি (320×180)  
+• <b>High</b> - উচ্চ কোয়ালিটি (480×360)
+• <b>Standard</b> - স্ট্যান্ডার্ড ডেফিনিশন (640×480)
+• <b>Max Resolution</b> - সর্বোচ্চ রেজোলিউশন (1280×720)
 
 <b>নিচের বাটন থেকে আপনার পছন্দের থাম্বনেইল সিলেক্ট করুন:</b>
                     """
@@ -253,12 +247,18 @@ https://youtu.be/dQw4w9WgXcQ
                     })
     
     except Exception as e:
-        print(f'গ্লোবাল এরর: {e}')
+        logger.error(f'Global error: {e}')
         return jsonify({
             'error': 'প্রসেসিং ব্যর্থ',
             'details': str(e)
         }), 500
 
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint for monitoring"""
+    return jsonify({'status': 'healthy', 'service': 'YouTube Thumbnail Bot'})
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
+    # Production server ব্যবহার করুন
     app.run(host='0.0.0.0', port=port)
