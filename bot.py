@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 import os
-import False
+import logging
 
 # লগিং কনফিগারেশন
 logging.basicConfig(
@@ -12,9 +12,6 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 def send_telegram_message(chat_id, text, parse_mode='Markdown'):
-    """
-    Telegram-এ মেসেজ সেন্ড করার জন্য সহায়ক ফাংশন
-    """
     return {
         'method': 'sendMessage',
         'chat_id': chat_id,
@@ -25,23 +22,20 @@ def send_telegram_message(chat_id, text, parse_mode='Markdown'):
 @app.route('/', methods=['GET', 'POST'])
 def handle_request():
     try:
-        # URL থেকে টোকেন নেওয়া
-        token = request.args.get('token')
+        token = request.args.get('token') or os.environ.get('BOT_TOKEN')
         
         if not token:
             return jsonify({
                 'error': 'Token required',
-                'solution': 'Add ?token=YOUR_BOT_TOKEN to URL'
+                'solution': 'Add ?token=YOUR_BOT_TOKEN to URL or set BOT_TOKEN environment variable'
             }), 400
 
-        # GET request হ্যান্ডেল
         if request.method == 'GET':
             return jsonify({
-                'status': 'Bot is running',
-                'token_received': True
+                'status': 'Bot is running on Render.com',
+                'token_received': bool(token)
             })
 
-        # POST request হ্যান্ডেল
         if request.method == 'POST':
             update = request.get_json()
             
@@ -50,7 +44,6 @@ def handle_request():
             
             logger.info(f"Update received: {update}")
             
-            # মেসেজ ডেটা এক্সট্র্যাক্ট
             chat_id = None
             message_text = ''
             user_info = {}
@@ -65,9 +58,7 @@ def handle_request():
             if not chat_id:
                 return jsonify({'error': 'Chat ID not found'}), 400
 
-            # শুধুমাত্র /start কমান্ড হ্যান্ডেল
             if message_text.startswith('/start'):
-                # ইউজারের তথ্য সংগ্রহ
                 first_name = user_info.get('first_name', 'অজানা')
                 last_name = user_info.get('last_name', '')
                 username = user_info.get('username', 'অজানা')
@@ -98,8 +89,6 @@ def handle_request():
                     chat_id=chat_id,
                     text=profile_text
                 ))
-
-            # অন্য সব মেসেজের জন্য
             else:
                 return jsonify(send_telegram_message(
                     chat_id=chat_id,
@@ -110,6 +99,10 @@ def handle_request():
         logger.error(f'Error: {e}')
         return jsonify({'error': 'Processing failed'}), 500
 
+@app.route('/health')
+def health_check():
+    return jsonify({'status': 'healthy'}), 200
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port, debug=FaFalse
+    app.run(host='0.0.0.0', port=port, debug=False)
