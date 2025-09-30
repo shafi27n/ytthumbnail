@@ -3,7 +3,8 @@ import requests
 import re
 import os
 import logging
-from urllib.parse import urlparse
+import base64
+from io import BytesIO
 
 # লগিং কনফিগারেশন
 logging.basicConfig(
@@ -69,12 +70,53 @@ def download_image(image_url):
     ইমেজ URL থেকে ডেটা ডাউনলোড করে
     """
     try:
-        response = requests.get(image_url, timeout=10)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        response = requests.get(image_url, timeout=10, headers=headers)
         response.raise_for_status()
         return response.content, None
     except Exception as e:
         logger.error(f"Image download error: {e}")
         return None, f"ইমেজ ডাউনলোড করতে সমস্যা: {str(e)}"
+
+def send_telegram_photo(chat_id, photo_url, caption, reply_markup=None, reply_to_message_id=None):
+    """
+    Telegram-এ ফটো সেন্ড করার জন্য সহায়ক ফাংশন
+    """
+    return {
+        'method': 'sendPhoto',
+        'chat_id': chat_id,
+        'photo': photo_url,  # সরাসরি URL ব্যবহার করি
+        'caption': caption,
+        'parse_mode': 'Markdown',
+        'reply_markup': reply_markup,
+        'reply_to_message_id': reply_to_message_id
+    }
+
+def send_telegram_message(chat_id, text, parse_mode='Markdown', disable_web_page_preview=True, reply_markup=None):
+    """
+    Telegram-এ মেসেজ সেন্ড করার জন্য সহায়ক ফাংশন
+    """
+    return {
+        'method': 'sendMessage',
+        'chat_id': chat_id,
+        'text': text,
+        'parse_mode': parse_mode,
+        'disable_web_page_preview': disable_web_page_preview,
+        'reply_markup': reply_markup
+    }
+
+def answer_callback_query(callback_query_id, text, show_alert=False):
+    """
+    ক্যালব্যাক কুয়েরি উত্তর দেওয়ার জন্য সহায়ক ফাংশন
+    """
+    return {
+        'method': 'answerCallbackQuery',
+        'callback_query_id': callback_query_id,
+        'text': text,
+        'show_alert': show_alert
+    }
 
 @app.route('/', methods=['GET', 'POST'])
 def handle_request():
@@ -110,6 +152,7 @@ def handle_request():
                 callback_data = update['callback_query']
                 chat_id = callback_data['message']['chat']['id']
                 message_id = callback_data['message']['message_id']
+                callback_query_id = callback_data['id']
                 data = callback_data['data']
                 
                 # ক্যালব্যাক ডেটা পার্স করা (format: quality|video_id)
@@ -118,38 +161,42 @@ def handle_request():
                     
                     # কোয়ালিটির নাম
                     quality_names = {
-                        'default': 'ছোট',
-                        'medium': 'মধ্যম', 
-                        'high': 'বড়',
-                        'standard': 'স্ট্যান্ডার্ড',
-                        'maxres': 'সর্বোচ্চ'
+                        'default': {'name': 'ছোট', 'emoji': '🟢', 'size': '120×90'},
+                        'medium': {'name': 'মধ্যম', 'emoji': '🟡', 'size': '320×180'}, 
+                        'high': {'name': 'বড়', 'emoji': '🟠', 'size': '480×360'},
+                        'standard': {'name': 'স্ট্যান্ডার্ড', 'emoji': '🔵', 'size': '640×480'},
+                        'maxres': {'name': 'সর্বোচ্চ', 'emoji': '🔴', 'size': '1280×720'}
                     }
                     
-                    quality_name = quality_names.get(quality, quality)
+                    quality_info = quality_names.get(quality, {'name': quality, 'emoji': '📷', 'size': 'Unknown'})
                     thumbnail_url = f'https://img.youtube.com/vi/{video_id}/{quality}.jpg'
                     
-                    # ইমেজ ডাউনলোড করা
-                    image_data, error = download_image(thumbnail_url)
+                    # প্রথমে ক্যালব্যাক কুয়েরি উত্তর দেই
+                    responses = [
+                        answer_callback_query(callback_query_id, f"{quality_info['emoji']} {quality_info['name']} কোয়ালিটি থাম্বনেইল প্রস্তুত হচ্ছে...", False)
+                    ]
                     
-                    if error:
-                        return jsonify({
-                            'method': 'answerCallbackQuery',
-                            'callback_query_id': callback_data['id'],
-                            'text': f'❌ {error}',
-                            'show_alert': True
-                        })
+                    # তারপর ফটো সেন্ড করি
+                    caption = f"""🖼️ **{quality_info['emoji']} {quality_info['name']} কোয়ালিটি থাম্বনেইল**
+
+📏 **রেজোলিউশন:** `{quality_info['size']}`
+🎯 **কোয়ালিটি:** `{quality}`
+🆔 **ভিডিও আইডি:** `{video_id}`
+
+✅ **থাম্বনেইল সফলভাবে ডাউনলোড হয়েছে!**"""
                     
-                    # ইমেজ আপলোড করা
-                    return jsonify({
-                        'method': 'sendPhoto',
-                        'chat_id': chat_id,
-                        'photo': image_data,
-                        'caption': f'🖼️ **{quality_name} কোয়ালিটি থাম্বনেইল**\n\nকোয়ালিটি: {quality_name}\nরেজোলিউশন: {quality}',
-                        'parse_mode': 'Markdown',
-                        'reply_to_message_id': message_id
-                    })
+                    responses.append(
+                        send_telegram_photo(
+                            chat_id=chat_id,
+                            photo_url=thumbnail_url,
+                            caption=caption,
+                            reply_to_message_id=message_id
+                        )
+                    )
+                    
+                    return jsonify(responses) if len(responses) > 1 else jsonify(responses[0])
                 
-                return jsonify({'ok': True})
+                return jsonify(answer_callback_query(callback_query_id, "ইনভ্যালিড রিকোয়েস্ট", True))
             
             # মেসেজ ডেটা এক্সট্র্যাক্ট
             chat_id = None
@@ -189,13 +236,11 @@ def handle_request():
 👉 **এখনই একটি YouTube লিংক সেন্ড করে ট্রাই করুন!**
                 """
                 
-                return jsonify({
-                    'method': 'sendMessage',
-                    'chat_id': chat_id,
-                    'text': welcome_text,
-                    'parse_mode': 'Markdown',
-                    'disable_web_page_preview': True
-                })
+                return jsonify(send_telegram_message(
+                    chat_id=chat_id,
+                    text=welcome_text,
+                    disable_web_page_preview=True
+                ))
 
             # /help কমান্ড হ্যান্ডেল
             elif message_text.startswith('/help'):
@@ -225,12 +270,10 @@ def handle_request():
 🛠️ **সাপোর্ট:** সমস্যা হলে /start কমান্ড দিয়ে আবার শুরু করুন।
                 """
                 
-                return jsonify({
-                    'method': 'sendMessage',
-                    'chat_id': chat_id,
-                    'text': help_text,
-                    'parse_mode': 'Markdown'
-                })
+                return jsonify(send_telegram_message(
+                    chat_id=chat_id,
+                    text=help_text
+                ))
 
             # YouTube লিংক চেক
             elif is_youtube_url(message_text):
@@ -238,12 +281,10 @@ def handle_request():
                 thumbnails, error = extract_youtube_thumbnail(message_text)
                 
                 if error:
-                    return jsonify({
-                        'method': 'sendMessage',
-                        'chat_id': chat_id,
-                        'text': f"❌ {error}",
-                        'parse_mode': 'Markdown'
-                    })
+                    return jsonify(send_telegram_message(
+                        chat_id=chat_id,
+                        text=f"❌ {error}"
+                    ))
                 
                 # ভিডিও ID এক্সট্র্যাক্ট
                 video_id = None
@@ -258,12 +299,10 @@ def handle_request():
                         break
                 
                 if not video_id:
-                    return jsonify({
-                        'method': 'sendMessage',
-                        'chat_id': chat_id,
-                        'text': "❌ ভিডিও ID খুঁজে পাওয়া যায়নি।",
-                        'parse_mode': 'Markdown'
-                    })
+                    return jsonify(send_telegram_message(
+                        chat_id=chat_id,
+                        text="❌ ভিডিও ID খুঁজে পাওয়া যায়নি।"
+                    ))
                 
                 # ইনলাইন বাটন তৈরি
                 buttons = []
@@ -286,9 +325,13 @@ def handle_request():
                         })
                         
                         # প্রতি row এ 2টি বাটন
-                        if len(row) == 2 or i == len(['default', 'medium', 'high', 'standard', 'maxres']) - 1:
+                        if len(row) == 2:
                             buttons.append(row)
                             row = []
+                
+                # শেষ row যোগ করুন
+                if row:
+                    buttons.append(row)
                 
                 reply_markup = {'inline_keyboard': buttons}
                 
@@ -314,21 +357,18 @@ def handle_request():
                               thumbnails.get('high', 
                               list(thumbnails.values())[0])))
                 
-                return jsonify({
-                    'method': 'sendPhoto',
-                    'chat_id': chat_id,
-                    'photo': preview_thumb,
-                    'caption': response_text,
-                    'parse_mode': 'Markdown',
-                    'reply_markup': reply_markup
-                })
+                return jsonify(send_telegram_photo(
+                    chat_id=chat_id,
+                    photo_url=preview_thumb,
+                    caption=response_text,
+                    reply_markup=reply_markup
+                ))
 
             # যদি YouTube লিংক না হয়
             else:
-                return jsonify({
-                    'method': 'sendMessage',
-                    'chat_id': chat_id,
-                    'text': """
+                return jsonify(send_telegram_message(
+                    chat_id=chat_id,
+                    text="""
 ❌ **ইনভ্যালিড লিংক**
 
 দয়া করে একটি বৈধ YouTube লিংক সেন্ড করুন।
@@ -342,11 +382,10 @@ def handle_request():
 `https://youtu.be/dQw4w9WgXcQ`
 `https://www.youtube.com/watch?v=dQw4w9WgXcQ`
 
-💡 **সাহায্যের জন্য** /help কমান্ড ব্যবহার করুন।
+💡 **সাহায্যের জন্য** `/help` কমান্ড ব্যবহার করুন।
                     """,
-                    'parse_mode': 'Markdown',
-                    'disable_web_page_preview': True
-                })
+                    disable_web_page_preview=True
+                ))
     
     except Exception as e:
         logger.error(f'Global error: {e}')
