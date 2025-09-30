@@ -36,7 +36,8 @@ def auto_discover_handlers():
                         'handle_video': 'video',
                         'handle_audio': 'audio',
                         'handle_voice': 'voice',
-                        'handle_text': 'text'  # নতুন text handler
+                        'handle_text': 'text',
+                        'handle_all_callbacks': 'callbacks'  # নতুন কলব্যাক হ্যান্ডলার
                     }
                     
                     for func_name, handler_type in special_functions.items():
@@ -91,6 +92,32 @@ def handle_request():
             if not update:
                 return jsonify({'error': 'Invalid JSON data'}), 400
             
+            # Handle callback queries (IMPORTANT FIX)
+            if 'callback_query' in update:
+                callback_data = update['callback_query']['data']
+                user_info = update['callback_query']['from']
+                chat_id = update['callback_query']['message']['chat']['id']
+                message_id = update['callback_query']['message']['message_id']
+                
+                # Try to find callback handler in all modules
+                for module_name in COMMAND_HANDLERS.keys():
+                    try:
+                        clean_module_name = module_name.replace('/', '')
+                        module = importlib.import_module(f'bot.handlers.{clean_module_name}')
+                        if hasattr(module, 'handle_all_callbacks'):
+                            result = module.handle_all_callbacks(callback_data, user_info, chat_id, message_id)
+                            if result:
+                                return result
+                    except ImportError:
+                        continue
+                
+                # Default callback response
+                return jsonify({
+                    'method': 'answerCallbackQuery',
+                    'callback_query_id': update['callback_query']['id'],
+                    'text': 'Action completed'
+                })
+            
             if 'message' in update:
                 return handle_message(update['message'])
             
@@ -99,8 +126,6 @@ def handle_request():
     except Exception as e:
         logger.error(f'Error: {e}')
         return jsonify({'error': 'Processing failed'}), 500
-
-# main.py ফাইলের handle_message ফাংশনে এই অংশটি যোগ করুন
 
 def handle_message(message):
     """Handle all types of messages"""
@@ -111,37 +136,15 @@ def handle_message(message):
     if not chat_id:
         return jsonify({'ok': True})
     
-    # Handle callback queries (NEW ADDITION)
-    if 'callback_query' in update:
-        callback_data = update['callback_query']['data']
-        user_info = update['callback_query']['from']
-        chat_id = update['callback_query']['message']['chat']['id']
-        message_id = update['callback_query']['message']['message_id']
-        
-        # Try to find callback handler in modules
-        for module_name in ['menu', 'form']:  # Add other modules as needed
-            try:
-                module = importlib.import_module(f'bot.handlers.{module_name}')
-                if hasattr(module, 'handle_all_callbacks'):
-                    result = module.handle_all_callbacks(callback_data, user_info, chat_id, message_id)
-                    if result:
-                        return result
-            except ImportError:
-                continue
-        
-        return jsonify(send_telegram_message(chat_id, "❌ Callback handler not found"))
-    
-    # Rest of your existing code...
-    
     # Handle text messages and commands
     if 'text' in message:
         # First check if it's a command
         for command, handler in COMMAND_HANDLERS.items():
             if message_text.startswith(command):
-                response_text = handler(user_info, chat_id, message_text)
-                return jsonify(send_telegram_message(chat_id, response_text))
+                result = handler(user_info, chat_id, message_text)
+                return result if result else jsonify({'ok': True})
         
-        # Check for text handler (for upload sessions)
+        # Check for text handler (for form sessions)
         if 'text' in SPECIAL_HANDLERS:
             text_response = SPECIAL_HANDLERS['text'](message)
             if text_response:
@@ -153,36 +156,21 @@ def handle_message(message):
             chat_id, 
             f"👋 <b>Hello {user_info.get('first_name', 'Friend')}!</b>\n\n"
             f"📋 <b>Available Commands:</b>\n{available_commands}\n\n"
-            f"💡 <b>Need help?</b> <b>/help</b>\n"
-            f"📸 <b>Want to upload?</b> <b>/upload</b>"
+            f"💡 <b>Need help?</b> Use <b>/menu</b> for interactive menu"
         ))
     
     # Handle media messages
     elif 'photo' in message and 'photo' in SPECIAL_HANDLERS:
-        return SPECIAL_HANDLERS['photo'](message)
+        photo_response = SPECIAL_HANDLERS['photo'](message)
+        return photo_response if photo_response else jsonify({'ok': True})
     
-    elif 'document' in message and 'document' in SPECIAL_HANDLERS:
-        return SPECIAL_HANDLERS['document'](message)
-    
-    elif 'video' in message and 'video' in SPECIAL_HANDLERS:
-        return SPECIAL_HANDLERS['video'](message)
-    
-    elif 'audio' in message and 'audio' in SPECIAL_HANDLERS:
-        return SPECIAL_HANDLERS['audio'](message)
-    
-    elif 'voice' in message and 'voice' in SPECIAL_HANDLERS:
-        return SPECIAL_HANDLERS['voice'](message)
+    # Handle other media types...
     
     else:
-        # Unknown message type
         return jsonify(send_telegram_message(
             chat_id,
             "❌ <b>Unsupported Message Type</b>\n\n"
-            "📋 <b>I can handle:</b>\n"
-            "• Text messages and commands\n"
-            "• Photos, videos, documents\n" 
-            "• Audio, voice messages\n\n"
-            "💡 <b>Try:</b> <b>/help</b>"
+            "💡 <b>Try:</b> <b>/menu</b> for interactive options"
         ))
 
 @app.route('/health')
