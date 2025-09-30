@@ -1,27 +1,36 @@
-from datetime import datetime
+from flask import jsonify
 
 def handle_start(user_info, chat_id, message_text):
-    """Handle /start command with HTML formatting"""
+    """Handle /start command"""
     
-    first_name = user_info.get('first_name', 'Friend')
-    username = user_info.get('username', '')
-    user_id = user_info.get('id', 'Unknown')
+    user_name = user_info.get('first_name', 'User')
     
-    welcome_text = f"""
-🎉 <b>Welcome {first_name}!</b>
+    response_text = f"""
+🎉 <b>স্বাগতম {user_name}!</b>
 
-🤖 <b>About Me:</b>
-I'm a <b>FULLY AUTOMATIC</b> modular Telegram bot!
-<b>No configuration needed</b> for new commands.
+🤖 এই বটের মাধ্যমে আপনি সহজেই:
+• 📋 ফর্ম জমা দিতে পারবেন
+• 🖼️ ছবি আপলোড করতে পারবেন  
+• 👥 গ্রুপে ডাটা শেয়ার করতে পারবেন
 
-📊 <b>Your Info:</b>
-• <b>User ID:</b> <b>{user_id}</b>
-• <b>Chat ID:</b> <b>{chat_id}</b>
-{f'• <b>Username:</b> @{username}' if username else '• <b>Username:</b> Not set'}
+📱 <b>দ্রুত এক্সেসের জন্য:</b>
+• <b>/menu</b> - ইন্টারেক্টিভ মেনু
+• <b>/form</b> - ফর্ম জমা দিন
+• <b>/help</b> - সহায়তা
 
-🕒 <b>Server Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-🔧 <b>Get started:</b> <b>/help</b>
+👇 <b>মেনু দিয়ে শুরু করুন:</b>
     """
     
-    return welcome_text
+    keyboard = {
+        'inline_keyboard': [
+            [{'text': '📱 মেনু খুলুন', 'callback_data': 'menu_refresh'}]
+        ]
+    }
+    
+    return jsonify({
+        'method': 'sendMessage',
+        'chat_id': chat_id,
+        'text': response_text,
+        'parse_mode': 'HTML',
+        'reply_markup': keyboard
+    })
