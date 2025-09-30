@@ -11,9 +11,6 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# ইউজার স্টেট স্টোর করার জন্য ডিকশনারি
-user_states = {}
-
 def send_telegram_message(chat_id, text, parse_mode='Markdown'):
     """
     Telegram-এ মেসেজ সেন্ড করার জন্য সহায়ক ফাংশন
@@ -56,10 +53,12 @@ def handle_request():
             # মেসেজ ডেটা এক্সট্র্যাক্ট
             chat_id = None
             message_text = ''
+            user_info = {}
             
-            if 'message' in update and 'text' in update['message']:
+            if 'message' in update:
                 chat_id = update['message']['chat']['id']
-                message_text = update['message']['text']
+                message_text = update['message'].get('text', '')
+                user_info = update['message'].get('from', {})
             else:
                 return jsonify({'ok': True})
 
@@ -68,57 +67,44 @@ def handle_request():
 
             # শুধুমাত্র /start কমান্ড হ্যান্ডেল
             if message_text.startswith('/start'):
-                welcome_text = """
-🤖 **স্বাগতম!**
+                # ইউজারের তথ্য সংগ্রহ
+                first_name = user_info.get('first_name', 'অজানা')
+                last_name = user_info.get('last_name', '')
+                username = user_info.get('username', 'অজানা')
+                user_id = user_info.get('id', 'অজানা')
+                language_code = user_info.get('language_code', 'অজানা')
+                
+                full_name = first_name
+                if last_name:
+                    full_name += f" {last_name}"
+                
+                profile_text = f"""
+🤖 **আপনার প্রোফাইল তথ্য**
 
-আমার নাম ইন্টার‍্যাক্টিভ বট। আমি আপনার কিছু তথ্য নেব।
+👤 **ব্যক্তিগত তথ্য:**
+• **পূর্ণ নাম:** {full_name}
+• **ইউজারনেম:** @{username}
+• **ইউজার আইডি:** `{user_id}`
+• **ভাষা:** {language_code}
 
-আপনার নাম কি?
+💬 **চ্যাট তথ্য:**
+• **চ্যাট আইডি:** `{chat_id}`
+• **বট:** ইন্টার‍্যাক্টিভ বট
+
+📞 **যোগাযোগ:** 
+আপনার ইউজারনেম @{username} এর মাধ্যমে যোগাযোগ করা যাবে।
                 """
                 
-                # ইউজার স্টেট সেটআপ শুরু
-                user_states[chat_id] = {'step': 'asking_name'}
-                
                 return jsonify(send_telegram_message(
                     chat_id=chat_id,
-                    text=welcome_text
-                ))
-
-            # ইউজার স্টেট অনুযায়ী প্রসেস
-            user_state = user_states.get(chat_id, {})
-            current_step = user_state.get('step', None)
-
-            if current_step == 'asking_name':
-                user_states[chat_id] = {
-                    'step': 'asking_age',
-                    'name': message_text
-                }
-                return jsonify(send_telegram_message(
-                    chat_id=chat_id,
-                    text=f"ধন্যবাদ {message_text}! আপনার বয়স কি?"
-                ))
-
-            elif current_step == 'asking_age':
-                user_states[chat_id] = {
-                    'step': None,
-                    'name': user_state.get('name', 'অজানা'),
-                    'age': message_text
-                }
-                return jsonify(send_telegram_message(
-                    chat_id=chat_id,
-                    text=f"""✅ **প্রোফাইল সম্পূর্ণ!**
-
-**নাম:** {user_state.get('name', 'অজানা')}
-**বয়স:** {message_text}
-
-আপনার প্রোফাইল সংরক্ষণ করা হয়েছে!"""
+                    text=profile_text
                 ))
 
             # অন্য সব মেসেজের জন্য
             else:
                 return jsonify(send_telegram_message(
                     chat_id=chat_id,
-                    text="বট শুরু করতে /start কমান্ড ব্যবহার করুন"
+                    text="আপনার প্রোফাইল দেখতে /start কমান্ড ব্যবহার করুন"
                 ))
 
     except Exception as e:
