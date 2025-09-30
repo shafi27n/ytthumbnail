@@ -12,12 +12,12 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# ডিফল্ট টোকেন - সরাসরি কোডে
+# ডিফল্ট টোকেন
 DEFAULT_TOKEN = "7628222622:AAEomk7Od-jcKnQMdkmOpejvYYF47BjMAMQ"
 
-# টোকেন লোড করার ফাংশন - URL parameter থেকে অথবা ডিফল্ট টোকেন ব্যবহার
+# টোকেন লোড করার ফাংশন
 def get_bot_token():
-    # Flask request থেকে URL parameter চেক করুন
+    # URL parameter থেকে টোকেন নিন
     token_from_url = request.args.get('token') if request else None
     if token_from_url:
         logger.info("✅ Token loaded from URL parameter")
@@ -27,8 +27,15 @@ def get_bot_token():
     logger.info("✅ Using default token")
     return DEFAULT_TOKEN
 
-# গ্লোবাল বট অবজেক্ট
-bot = None
+# বট ইনিশিয়ালাইজেশন
+def initialize_bot(token):
+    try:
+        bot = telebot.TeleBot(token)
+        logger.info("✅ Bot initialized successfully")
+        return bot
+    except Exception as e:
+        logger.error(f"❌ Bot initialization failed: {e}")
+        return None
 
 # ইউটিউব ভিডিও আইডি এক্সট্র্যাক্ট করার ফাংশন
 def extract_video_id(url):
@@ -69,21 +76,12 @@ def download_thumbnail(video_id):
         logger.error(f"Error downloading thumbnail: {e}")
         return None
 
-# বট ইনিশিয়ালাইজেশন ফাংশন
-def initialize_bot(token):
-    global bot
-    try:
-        bot = telebot.TeleBot(token)
-        logger.info("✅ Bot initialized successfully")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Bot initialization failed: {e}")
-        return False
-
-# বট কমান্ড হ্যান্ডলার
-def setup_bot_handlers():
-    @bot.message_handler(commands=['start'])
-    def send_welcome(message):
+# মেসেজ প্রসেস করার ফাংশন
+def process_message(bot, message):
+    chat_id = message.chat.id
+    text = message.text.strip()
+    
+    if text.startswith('/start'):
         welcome_text = """
 🎉 **ইউটিউব থাম্বনেইল ডাউনলোডার বটে স্বাগতম!** 🎉
 
@@ -96,163 +94,209 @@ def setup_bot_handlers():
 
 উদাহরণ: `https://www.youtube.com/watch?v=dQw4w9WgXcQ`
         """
-        bot.reply_to(message, welcome_text)
+        bot.send_message(chat_id, welcome_text)
+        return
 
-    @bot.message_handler(commands=['help'])
-    def send_help(message):
+    elif text.startswith('/help'):
         help_text = """
 🤖 **ইউটিউব থাম্বনেইল ডাউনলোডার বট - সাহায্য**
 
 📋 **কমান্ডসমূহ:**
 /start - বট শুরু করুন
 /help - এই সাহায্য মেসেজ দেখুন
+/status - বট স্ট্যাটাস চেক করুন
 
 🔗 **লিংক ফরম্যাট:**
 - https://www.youtube.com/watch?v=VIDEO_ID
 - https://youtu.be/VIDEO_ID
 - https://www.youtube.com/embed/VIDEO_ID
         """
-        bot.reply_to(message, help_text)
+        bot.send_message(chat_id, help_text)
+        return
 
-    @bot.message_handler(commands=['status'])
-    def send_status(message):
+    elif text.startswith('/status'):
         status_text = """
 🤖 **বট স্ট্যাটাস**
 ✅ বট এক্টিভ এবং কাজ করছে
 🖼️ ইউটিউব থাম্বনেইল ডাউনলোড করতে প্রস্তুত
+🌐 Webhook মোড - অন-ডিমান্ড কাজ করে
         """
-        bot.reply_to(message, status_text)
+        bot.send_message(chat_id, status_text)
+        return
 
-    @bot.message_handler(func=lambda message: True)
-    def handle_youtube_link(message):
-        text = message.text.strip()
+    # ইউটিউব লিংক প্রসেস করা
+    elif 'youtube.com' in text or 'youtu.be' in text:
+        bot.send_message(chat_id, "🔍 আপনার ইউটিউব লিংক প্রসেস করা হচ্ছে...")
         
-        if 'youtube.com' in text or 'youtu.be' in text:
-            bot.reply_to(message, "🔍 আপনার ইউটিউব লিংক প্রসেস করা হচ্ছে...")
-            
-            video_id = extract_video_id(text)
-            
-            if video_id:
-                try:
-                    yt = YouTube(text)
-                    video_title = yt.title
+        video_id = extract_video_id(text)
+        
+        if video_id:
+            try:
+                yt = YouTube(text)
+                video_title = yt.title
+                
+                bot.send_message(chat_id, f"📹 **ভিডিও টাইটেল:** {video_title}\n\n⬇️ থাম্বনেইল ডাউনলোড করা হচ্ছে...")
+                
+                thumbnail_file = download_thumbnail(video_id)
+                
+                if thumbnail_file:
+                    with open(thumbnail_file, 'rb') as photo:
+                        bot.send_photo(chat_id, photo, 
+                                     caption=f"🖼️ **থাম্বনেইল ডাউনলোড সম্পূর্ণ!**\n\n📹 **ভিডিও:** {video_title}\n🔗 **ভিডিও আইডি:** `{video_id}`")
                     
-                    bot.reply_to(message, f"📹 **ভিডিও টাইটেল:** {video_title}\n\n⬇️ থাম্বনেইল ডাউনলোড করা হচ্ছে...")
+                    os.remove(thumbnail_file)
+                    logger.info(f"✅ Thumbnail sent for video: {video_id}")
+                else:
+                    bot.send_message(chat_id, "❌ থাম্বনেইল ডাউনলোড করতে সমস্যা হয়েছে। ভিডিওটি পাবলিক কিনা চেক করুন।")
                     
-                    thumbnail_file = download_thumbnail(video_id)
-                    
-                    if thumbnail_file:
-                        with open(thumbnail_file, 'rb') as photo:
-                            bot.send_photo(message.chat.id, photo, 
-                                         caption=f"🖼️ **থাম্বনেইল ডাউনলোড সম্পূর্ণ!**\n\n📹 **ভিডিও:** {video_title}\n🔗 **ভিডিও আইডি:** `{video_id}`")
-                        
-                        os.remove(thumbnail_file)
-                        logger.info(f"✅ Thumbnail sent for video: {video_id}")
-                    else:
-                        bot.reply_to(message, "❌ থাম্বনেইল ডাউনলোড করতে সমস্যা হয়েছে। ভিডিওটি পাবলিক কিনা চেক করুন।")
-                        
-                except Exception as e:
-                    error_msg = f"❌ ভিডিও তথ্য পাওয়া যায়নি। ত্রুটি: {str(e)}"
-                    bot.reply_to(message, error_msg)
-                    logger.error(f"Video error: {e}")
-            else:
-                bot.reply_to(message, "❌ ভ্যালিড ইউটিউব লিংক প্রদান করুন।")
+            except Exception as e:
+                error_msg = f"❌ ভিডিও তথ্য পাওয়া যায়নি। ত্রুটি: {str(e)}"
+                bot.send_message(chat_id, error_msg)
+                logger.error(f"Video error: {e}")
         else:
-            bot.reply_to(message, "❌ দয়া করে একটি ভ্যালিড ইউটিউব লিংক পাঠান।")
+            bot.send_message(chat_id, "❌ ভ্যালিড ইউটিউব লিংক প্রদান করুন।")
+    else:
+        bot.send_message(chat_id, "❌ দয়া করে একটি ভ্যালিড ইউটিউব লিংক পাঠান।")
 
 # Flask Routes
 @app.route('/')
 def home():
-    token = get_bot_token()
-    bot_initialized = initialize_bot(token) if token else False
-    
     return jsonify({
         "status": "active", 
         "bot": "YouTube Thumbnail Downloader",
-        "token_used": "default" if token == DEFAULT_TOKEN else "from_url",
-        "bot_initialized": bot_initialized,
+        "mode": "webhook",
+        "description": "Bot works on-demand via webhook, not always connected",
         "endpoints": {
-            "webhook": "/webhook",
+            "webhook": "/webhook (POST)",
             "health": "/health",
-            "start_bot": "/start-bot"
-        }
+            "set_webhook": "/set-webhook?url=YOUR_URL"
+        },
+        "usage": "Send Telegram messages to this bot, they will be processed via webhook"
     })
 
 @app.route('/health')
 def health():
-    return jsonify({"status": "healthy", "bot_running": bot is not None})
+    return jsonify({"status": "healthy", "mode": "webhook"})
 
-@app.route('/start-bot')
-def start_bot():
+@app.route('/set-webhook', methods=['GET', 'POST'])
+def set_webhook():
     token = get_bot_token()
-    if initialize_bot(token):
-        setup_bot_handlers()
-        
-        # বট পোলিং শুরু করুন (background এ)
-        import threading
-        def start_polling():
-            try:
-                logger.info("🔄 Starting bot polling...")
-                bot.infinity_polling()
-            except Exception as e:
-                logger.error(f"Bot polling error: {e}")
-        
-        bot_thread = threading.Thread(target=start_polling)
-        bot_thread.daemon = True
-        bot_thread.start()
+    bot = initialize_bot(token)
+    
+    if not bot:
+        return jsonify({"status": "error", "message": "Failed to initialize bot"}), 500
+    
+    # Webhook URL - বর্তমান URL ব্যবহার করুন
+    webhook_url = request.args.get('url') or request.url_root + 'webhook'
+    
+    try:
+        # Telegram এ webhook সেট করুন
+        result = bot.set_webhook(url=webhook_url)
+        logger.info(f"Webhook set to: {webhook_url}")
         
         return jsonify({
             "status": "success", 
-            "message": "Bot started successfully",
-            "token_source": "default" if token == DEFAULT_TOKEN else "url_parameter"
+            "message": "Webhook set successfully",
+            "webhook_url": webhook_url,
+            "result": result
         })
-    else:
+    except Exception as e:
+        logger.error(f"Webhook setting error: {e}")
         return jsonify({
             "status": "error", 
-            "message": "Failed to initialize bot"
+            "message": f"Failed to set webhook: {str(e)}"
+        }), 500
+
+@app.route('/remove-webhook', methods=['GET', 'POST'])
+def remove_webhook():
+    token = get_bot_token()
+    bot = initialize_bot(token)
+    
+    if not bot:
+        return jsonify({"status": "error", "message": "Failed to initialize bot"}), 500
+    
+    try:
+        # Webhook রিমুভ করুন
+        result = bot.remove_webhook()
+        logger.info("Webhook removed successfully")
+        
+        return jsonify({
+            "status": "success", 
+            "message": "Webhook removed successfully",
+            "result": result
+        })
+    except Exception as e:
+        logger.error(f"Webhook removal error: {e}")
+        return jsonify({
+            "status": "error", 
+            "message": f"Failed to remove webhook: {str(e)}"
         }), 500
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
+    """
+    Telegram webhook endpoint - এখানে সব মেসেজ আসবে
+    """
     if request.method == 'POST':
         try:
-            json_string = request.get_data().decode('utf-8')
-            update = telebot.types.Update.de_json(json_string)
+            # JSON ডেটা পান
+            json_data = request.get_json()
+            logger.info(f"📨 Received webhook data: {json_data}")
             
-            # বট ইনিশিয়ালাইজ করা নেই就先 করুন
+            if not json_data:
+                return 'No data received', 400
+            
+            # টোকেন লোড করুন
             token = get_bot_token()
-            if not bot:
-                initialize_bot(token)
-                setup_bot_handlers()
+            bot = initialize_bot(token)
             
-            bot.process_new_updates([update])
+            if not bot:
+                return 'Bot initialization failed', 500
+            
+            # Telegram update object তৈরি করুন
+            update = telebot.types.Update.de_json(json_data)
+            
+            # মেসেজ থাকলে প্রসেস করুন
+            if update.message:
+                process_message(bot, update.message)
+            
             return 'OK', 200
+            
         except Exception as e:
-            logger.error(f"Webhook error: {e}")
+            logger.error(f"Webhook processing error: {e}")
             return 'ERROR', 500
+
+@app.route('/test', methods=['GET', 'POST'])
+def test_bot():
+    """
+    টেস্ট এন্ডপয়েন্ট - ম্যানুয়ালি টেস্ট করার জন্য
+    """
+    token = get_bot_token()
+    bot = initialize_bot(token)
+    
+    if not bot:
+        return jsonify({"status": "error", "message": "Bot initialization failed"})
+    
+    # একটি টেস্ট মেসেজ সিমুলেট করুন
+    class TestMessage:
+        def __init__(self, text):
+            self.chat = type('Chat', (), {'id': 123456})()  # ডামি chat ID
+            self.text = text
+    
+    test_message = TestMessage("/start")
+    process_message(bot, test_message)
+    
+    return jsonify({
+        "status": "success", 
+        "message": "Test message processed",
+        "test_message": "/start"
+    })
 
 # মেইন এন্ট্রি পয়েন্ট
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"🚀 Starting YouTube Thumbnail Bot on port {port}")
-    
-    # অটোমেটিকভাবে বট শুরু করুন
-    token = DEFAULT_TOKEN  # ডিফল্ট টোকেন ব্যবহার
-    if initialize_bot(token):
-        setup_bot_handlers()
-        
-        # বট পোলিং শুরু করুন
-        import threading
-        def start_polling():
-            try:
-                logger.info("🔄 Starting bot polling...")
-                bot.infinity_polling()
-            except Exception as e:
-                logger.error(f"Bot polling error: {e}")
-        
-        bot_thread = threading.Thread(target=start_polling)
-        bot_thread.daemon = True
-        bot_thread.start()
+    logger.info("🌐 Webhook Mode - Bot will work on-demand only")
     
     # Flask app চালু করুন
     app.run(host='0.0.0.0', port=port, debug=False)
