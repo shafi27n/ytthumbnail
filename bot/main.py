@@ -87,12 +87,12 @@ def handle_request():
                         return jsonify(send_telegram_message(chat_id, response_text))
                 
                 # Default response for unknown commands
-                available_commands = "\n".join([f"• <code>{cmd}</code>" for cmd in COMMAND_HANDLERS.keys()])
+                available_commands = "\n".join([f"• <b>{cmd}</b>" for cmd in COMMAND_HANDLERS.keys()])
                 return jsonify(send_telegram_message(
                     chat_id, 
-                    f"❌ <b>Unknown Command:</b> <code>{message_text}</code>\n\n"
+                    f"❌ <b>Unknown Command:</b> <b>{message_text}</b>\n\n"
                     f"📋 <b>Available Commands:</b>\n{available_commands}\n\n"
-                    f"💡 <b>Help:</b> <code>/help</code>"
+                    f"💡 <b>Help:</b> <b>/help</b>"
                 ))
             
             return jsonify({'ok': True})
