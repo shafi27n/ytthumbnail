@@ -29,8 +29,7 @@ def handle_menu(user_info, chat_id, message_text):
                 {'text': '📋 ফর্ম জমা দিন', 'callback_data': 'menu_form'}
             ],
             [
-                {'text': '🔄 রিফ্রেশ মেনু', 'callback_data': 'menu_refresh'},
-                {'text': '❓ সাহায্য', 'callback_data': 'menu_help'}
+                {'text': '🔄 রিফ্রেশ মেনু', 'callback_data': 'menu_refresh'}
             ]
         ]
     }
@@ -43,29 +42,35 @@ def handle_menu(user_info, chat_id, message_text):
         'reply_markup': keyboard
     })
 
-def handle_callback(callback_data, user_info, chat_id, message_id):
-    """Handle menu button callbacks"""
+def handle_all_callbacks(callback_data, user_info, chat_id, message_id):
+    """Handle all menu callbacks"""
     
     if callback_data == 'menu_help':
-        return edit_menu_with_command(chat_id, message_id, "help")
+        return show_help_menu(chat_id, message_id)
     
     elif callback_data == 'menu_start':
-        return edit_menu_with_command(chat_id, message_id, "start")
+        return show_start_menu(chat_id, message_id, user_info)
     
     elif callback_data == 'menu_form':
-        return edit_menu_with_command(chat_id, message_id, "form")
+        return show_form_menu(chat_id, message_id)
     
     elif callback_data == 'menu_refresh':
-        return refresh_menu(chat_id, message_id, user_info)
+        return refresh_main_menu(chat_id, message_id, user_info)
+    
+    elif callback_data == 'start_form_from_menu':
+        # Return a new message to start form (can't edit message for session start)
+        from .form import handle_form
+        return handle_form(user_info, chat_id, "")
+    
+    elif callback_data == 'back_to_main':
+        return refresh_main_menu(chat_id, message_id, user_info)
     
     return None
 
-def edit_menu_with_command(chat_id, message_id, command_name):
-    """Edit menu and show command execution message"""
+def show_help_menu(chat_id, message_id):
+    """Show help information"""
     
-    command_messages = {
-        'help': {
-            'text': """
+    help_text = """
 🆘 <b>সহায়তা মেনু</b>
 
 📚 <b>সকল কমান্ড:</b>
@@ -76,70 +81,108 @@ def edit_menu_with_command(chat_id, message_id, command_name):
 • <code>/help</code> - সহায়তা দেখুন
 • <code>/cancel</code> - বর্তমান কাজ বাতিল করুন
 
-ℹ️ <b>মেনুতে ফিরতে:</b> /menu
-            """,
-            'buttons': [
-                [{'text': '↩️ মেনুতে ফিরুন', 'callback_data': 'menu_refresh'}]
-            ]
-        },
-        'start': {
-            'text': f"""
+ℹ️ <b>কিভাবে ব্যবহার করবেন:</b>
+১. <b>/form</b> দিয়ে ফর্ম শুরু করুন
+২. আপনার নাম লিখুন
+৩. ছবি আপলোড করুন
+৪. ডাটা অটোমেটিক গ্রুপে শেয়ার হবে
+    """
+    
+    keyboard = {
+        'inline_keyboard': [
+            [{'text': '📋 ফর্ম শুরু করুন', 'callback_data': 'start_form_from_menu'}],
+            [{'text': '↩️ মেনুতে ফিরুন', 'callback_data': 'back_to_main'}]
+        ]
+    }
+    
+    return jsonify({
+        'method': 'editMessageText',
+        'chat_id': chat_id,
+        'message_id': message_id,
+        'text': help_text,
+        'parse_mode': 'HTML',
+        'reply_markup': keyboard
+    })
+
+def show_start_menu(chat_id, message_id, user_info):
+    """Show start information"""
+    
+    user_name = user_info.get('first_name', 'User')
+    
+    start_text = f"""
 🚀 <b>বট শুরু করা হয়েছে!</b>
 
-🎉 স্বাগতম! এই বটের মাধ্যমে আপনি:
+🎉 স্বাগতম <b>{user_name}</b>! এই বটের মাধ্যমে আপনি:
 
-• 📋 ফর্ম জমা দিতে পারবেন
-• 🖼️ ছবি আপলোড করতে পারবেন
-• 👥 গ্রুপে ডাটা শেয়ার করতে পারবেন
+• 📋 <b>ফর্ম জমা</b> দিতে পারবেন
+• 🖼️ <b>ছবি আপলোড</b> করতে পারবেন  
+• 👥 <b>গ্রুপে ডাটা</b> শেয়ার করতে পারবেন
 
-📌 <b>মেনু থেকে অপশন সিলেক্ট করুন:</b>
-            """,
-            'buttons': [
-                [{'text': '📋 ফর্ম জমা দিন', 'callback_data': 'menu_form'}],
-                [{'text': '↩️ মেনুতে ফিরুন', 'callback_data': 'menu_refresh'}]
-            ]
-        },
-        'form': {
-            'text': """
+📌 <b>দ্রুত শুরু করতে:</b>
+নিচের <b>'ফর্ম শুরু করুন'</b> বাটন প্রেস করুন
+    """
+    
+    keyboard = {
+        'inline_keyboard': [
+            [{'text': '📋 ফর্ম শুরু করুন', 'callback_data': 'start_form_from_menu'}],
+            [{'text': '🆘 সহায়তা', 'callback_data': 'menu_help'}],
+            [{'text': '↩️ মেনুতে ফিরুন', 'callback_data': 'back_to_main'}]
+        ]
+    }
+    
+    return jsonify({
+        'method': 'editMessageText',
+        'chat_id': chat_id,
+        'message_id': message_id,
+        'text': start_text,
+        'parse_mode': 'HTML',
+        'reply_markup': keyboard
+    })
+
+def show_form_menu(chat_id, message_id):
+    """Show form information"""
+    
+    form_text = """
 📋 <b>ফর্ম সিস্টেম</b>
 
 এই ফর্মের মাধ্যমে আপনি:
 
-1. আপনার নাম জমা দিতে পারবেন
-2. আপনার ছবি আপলোড করতে পারবেন  
-3. ডাটা গ্রুপে শেয়ার করতে পারবেন
+1. 📛 <b>আপনার নাম</b> জমা দিতে পারবেন
+2. 🖼️ <b>আপনার ছবি</b> আপলোড করতে পারবেন  
+3. 👥 <b>ডাটা গ্রুপে</b> শেয়ার করতে পারবেন
+
+🔄 <b>কাজের ধাপ:</b>
+1. ফর্ম শুরু করুন
+2. নাম লিখুন
+3. ছবি আপলোড করুন
+4. অটোমেটিক গ্রুপে শেয়ার হবে
 
 ✅ ফর্ম শুরু করতে নিচের বাটন প্রেস করুন:
-            """,
-            'buttons': [
-                [{'text': '📝 ফর্ম শুরু করুন', 'callback_data': 'start_form'}],
-                [{'text': '↩️ মেনুতে ফিরুন', 'callback_data': 'menu_refresh'}]
-            ]
-        }
+    """
+    
+    keyboard = {
+        'inline_keyboard': [
+            [{'text': '🚀 ফর্ম শুরু করুন', 'callback_data': 'start_form_from_menu'}],
+            [{'text': '🆘 সহায়তা', 'callback_data': 'menu_help'}],
+            [{'text': '↩️ মেনুতে ফিরুন', 'callback_data': 'back_to_main'}]
+        ]
     }
     
-    if command_name in command_messages:
-        message_data = command_messages[command_name]
-        
-        keyboard = {
-            'inline_keyboard': message_data['buttons']
-        }
-        
-        return jsonify({
-            'method': 'editMessageText',
-            'chat_id': chat_id,
-            'message_id': message_id,
-            'text': message_data['text'],
-            'parse_mode': 'HTML',
-            'reply_markup': keyboard
-        })
+    return jsonify({
+        'method': 'editMessageText',
+        'chat_id': chat_id,
+        'message_id': message_id,
+        'text': form_text,
+        'parse_mode': 'HTML',
+        'reply_markup': keyboard
+    })
 
-def refresh_menu(chat_id, message_id, user_info):
+def refresh_main_menu(chat_id, message_id, user_info):
     """Refresh the main menu"""
     
     user_name = user_info.get('first_name', 'User')
     
-    response_text = f"""
+    menu_text = f"""
 🎯 <b>মেইন মেনু</b>
 
 ✨ স্বাগতম <b>{user_name}</b>!
@@ -163,8 +206,7 @@ def refresh_menu(chat_id, message_id, user_info):
                 {'text': '📋 ফর্ম জমা দিন', 'callback_data': 'menu_form'}
             ],
             [
-                {'text': '🔄 রিফ্রেশ মেনু', 'callback_data': 'menu_refresh'},
-                {'text': '❓ সাহায্য', 'callback_data': 'menu_help'}
+                {'text': '🔄 রিফ্রেশ মেনু', 'callback_data': 'menu_refresh'}
             ]
         ]
     }
@@ -173,34 +215,7 @@ def refresh_menu(chat_id, message_id, user_info):
         'method': 'editMessageText',
         'chat_id': chat_id,
         'message_id': message_id,
-        'text': response_text,
+        'text': menu_text,
         'parse_mode': 'HTML',
         'reply_markup': keyboard
     })
-
-# Special handler for starting form from menu
-def handle_start_form_callback(callback_data, user_info, chat_id, message_id):
-    """Handle direct form start from menu"""
-    
-    if callback_data == 'start_form':
-        # Send a new message to start the form (can't edit to start session properly)
-        from .form import handle_form
-        return handle_form(user_info, chat_id, "")
-    
-    return None
-
-# Handle combined callbacks
-def handle_all_callbacks(callback_data, user_info, chat_id, message_id):
-    """Handle all callback types"""
-    
-    # First try menu callbacks
-    result = handle_callback(callback_data, user_info, chat_id, message_id)
-    if result:
-        return result
-    
-    # Then try form start callback
-    result = handle_start_form_callback(callback_data, user_info, chat_id, message_id)
-    if result:
-        return result
-    
-    return None
