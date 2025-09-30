@@ -1,103 +1,143 @@
 import requests
 import os
-from datetime import datetime
+import json
+from flask import jsonify
+
+# In-memory storage for upload sessions (production-এ database use করতে হবে)
+UPLOAD_SESSIONS = {}
 
 def handle_upload(user_info, chat_id, message_text):
-    """Handle /upload command with HTML formatting"""
+    """Handle /upload command and wait for user reply"""
     
     first_name = user_info.get('first_name', 'Friend')
-    username = user_info.get('username', '')
-    user_id = user_info.get('id', 'Unknown')
+    user_id = user_info.get('id')
+    
+    # Create upload session
+    UPLOAD_SESSIONS[user_id] = {
+        'waiting_for_upload': True,
+        'chat_id': chat_id,
+        'first_name': first_name
+    }
     
     instruction_text = f"""
-📤 <b>Universal Upload System</b>
+📤 <b>Upload System Ready!</b>
 
 👋 <b>Hello {first_name}!</b>
+
+🚀 <b>I'm waiting for your file...</b>
 
 🔄 <b>What you can upload:</b>
 • 📸 <b>Photos</b> - Send as photo
 • 📄 <b>Documents</b> - Any file type  
 • 🎥 <b>Videos</b> - Video files
-• 🎵 <b>Audio</b> - Music/audio files
-• 🎤 <b>Voice messages</b> - Voice recordings
+• 🎵 <b>Audio</b> - Music files
+• 🎤 <b>Voice messages</b>
 
-⚡ <b>How it works:</b>
-1. Send any file/media to this chat
-2. I'll automatically forward it to @refffrrr
-3. You'll get a direct download link
-4. Share the link with anyone
+⚡ <b>Just send any file now!</b>
+I'll automatically forward it to @refffrrr and give you the shareable link.
 
-🔧 <b>Upload Steps:</b>
-1. <code>/upload</code> - See these instructions
-2. <b>Select file</b> from your device
-3. <b>Send as file</b> (not as photo for documents)
-4. <b>Wait for processing</b>
-5. <b>Get shareable link</b>
+⏳ <b>Upload session active for 5 minutes</b>
 
-👤 <b>Your Info:</b>
-• <b>Name:</b> {first_name}
-• <b>User ID:</b> <code>{user_id}</code>
-• <b>Chat ID:</b> <code>{chat_id}</code>
-{f'• <b>Username:</b> @{username}' if username else '• <b>Username:</b> Not set'}
+❌ <b>To cancel:</b> Send /cancel or any text message
 
-📦 <b>File Requirements:</b>
-• <b>Max size:</b> 20MB (Telegram limit)
-• <b>Supported types:</b> All common formats
-• <b>Processing:</b> Instant forwarding
-
-🚀 <b>Ready to upload? Just send your file now!</b>
-
-💡 <b>Pro Tip:</b> For photos, send as <b>photo</b> for better quality.
-For documents, send as <b>file</b> to preserve original format.
+💡 <b>Supported:</b> All common file types
+📦 <b>Max size:</b> 20MB (Telegram limit)
     """
     
     return instruction_text
 
 def handle_photo(message):
-    """Handle photo uploads automatically"""
-    return process_media_upload(message, 'photo', '📸', 'Photo')
+    """Handle photo uploads"""
+    return process_uploaded_media(message, 'photo', '📸')
 
 def handle_document(message):
-    """Handle document uploads automatically"""
-    return process_media_upload(message, 'document', '📄', 'Document')
+    """Handle document uploads""" 
+    return process_uploaded_media(message, 'document', '📄')
 
 def handle_video(message):
-    """Handle video uploads automatically"""
-    return process_media_upload(message, 'video', '🎥', 'Video')
+    """Handle video uploads"""
+    return process_uploaded_media(message, 'video', '🎥')
 
 def handle_audio(message):
-    """Handle audio uploads automatically"""
-    return process_media_upload(message, 'audio', '🎵', 'Audio')
+    """Handle audio uploads"""
+    return process_uploaded_media(message, 'audio', '🎵')
 
 def handle_voice(message):
-    """Handle voice message uploads automatically"""
-    return process_media_upload(message, 'voice', '🎤', 'Voice Message')
+    """Handle voice message uploads"""
+    return process_uploaded_media(message, 'voice', '🎤')
 
-def process_media_upload(message, media_type, emoji, media_name):
-    """Process media upload and forward to channel"""
+def handle_text(message):
+    """Handle text messages during upload session"""
+    chat_id = message.get('chat', {}).get('id')
+    user_info = message.get('from', {})
+    user_id = user_info.get('id')
+    message_text = message.get('text', '').strip().lower()
+    
+    # Check if user has active upload session
+    if user_id in UPLOAD_SESSIONS:
+        # User sent text instead of file - cancel upload session
+        del UPLOAD_SESSIONS[user_id]
+        
+        if message_text in ['/cancel', 'cancel', 'বাতিল']:
+            return jsonify(send_telegram_message(
+                chat_id,
+                "❌ <b>Upload cancelled.</b>\n\n"
+                "📤 Want to upload again? Send <code>/upload</code>",
+                parse_mode='HTML'
+            ))
+        else:
+            return jsonify(send_telegram_message(
+                chat_id,
+                "ℹ️ <b>Upload session ended.</b>\n\n"
+                "You sent a text message instead of a file.\n\n"
+                "📤 To upload files, send <code>/upload</code> again",
+                parse_mode='HTML'
+            ))
+    
+    return None
+
+def process_uploaded_media(message, media_type, emoji):
+    """Process uploaded media during active session"""
     try:
         chat_id = message.get('chat', {}).get('id')
         user_info = message.get('from', {})
+        user_id = user_info.get('id')
         message_id = message.get('message_id')
         
         first_name = user_info.get('first_name', 'User')
         username = user_info.get('username', '')
-        user_id = user_info.get('id', 'Unknown')
         
-        # Get file information
-        file_id = get_file_id_from_message(message, media_type)
-        file_url = get_telegram_file_url(file_id) if file_id else None
+        # Check if user has active upload session
+        if user_id not in UPLOAD_SESSIONS:
+            return jsonify(send_telegram_message(
+                chat_id,
+                "❌ <b>No active upload session!</b>\n\n"
+                "💡 <b>To upload files:</b>\n"
+                "1. Send <code>/upload</code> first\n"
+                "2. Then send your file\n\n"
+                "🚀 <b>Start now:</b> <code>/upload</code>",
+                parse_mode='HTML'
+            ))
         
-        # Forward to channel @refffrrr
-        forward_result = forward_to_channel(chat_id, message_id)
+        # Clear the upload session
+        del UPLOAD_SESSIONS[user_id]
         
-        # Get file details
-        file_size = get_file_size(message, media_type)
-        mime_type = get_mime_type(message, media_type)
+        # Forward to channel
+        forward_result = forward_to_channel(chat_id, message_id, '@refffrrr')
         
         if forward_result.get('ok'):
-            # Success response
             channel_message_id = forward_result['result']['message_id']
+            file_link = f"https://cmt.me/refffrrr/{channel_message_id}"
+            
+            media_names = {
+                'photo': 'Photo',
+                'document': 'Document', 
+                'video': 'Video',
+                'audio': 'Audio',
+                'voice': 'Voice Message'
+            }
+            
+            media_name = media_names.get(media_type, 'File')
             
             success_text = f"""
 {emoji} <b>{media_name} Successfully Uploaded!</b>
@@ -105,79 +145,58 @@ def process_media_upload(message, media_type, emoji, media_name):
 ✅ <b>Status:</b> Forwarded to @refffrrr
 👤 <b>Uploaded by:</b> {first_name} {f'(@{username})' if username else ''}
 📁 <b>File Type:</b> {media_name}
-{f'📊 <b>File Size:</b> {file_size}' if file_size else ''}
-{f'🎯 <b>File Format:</b> {mime_type}' if mime_type else ''}
+🔗 <b>Shareable Link:</b> 
+<code>{file_link}</code>
 
-🔗 <b>Direct Download Link:</b>
-<code>{file_url}</code>
+📤 <b>Share this link with anyone!</b>
 
-🆔 <b>File Information:</b>
-• <b>File ID:</b> <code>{file_id}</code>
-• <b>Channel Message ID:</b> <code>{channel_message_id}</code>
-• <b>User ID:</b> <code>{user_id}</code>
-• <b>Upload Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-💡 <b>How to share:</b>
-Copy the download link above and share it with anyone.
-The link will work as long as the file exists on Telegram servers.
-
-📤 <b>Want to upload more?</b> Just send another file!
-
-🔗 <b>Quick Share:</b> <code>{file_url}</code>
+🚀 <b>Want to upload more?</b> 
+Send <code>/upload</code> again!
             """
             
-            return {
-                'method': 'sendMessage',
-                'chat_id': chat_id,
-                'text': success_text,
-                'parse_mode': 'HTML'
-            }
+            return jsonify(send_telegram_message(
+                chat_id,
+                success_text,
+                parse_mode='HTML'
+            ))
         else:
-            # Forward failed
             error_text = f"""
 ❌ <b>Upload Failed!</b>
 
 ⚠️ <b>Error:</b> Could not forward to @refffrrr
 🔧 <b>Reason:</b> {forward_result.get('description', 'Unknown error')}
 
-👤 <b>User:</b> {first_name}
-📁 <b>File Type:</b> {media_name}
-{f'🔗 <b>File URL:</b> <code>{file_url}</code>' if file_url else ''}
-
-🔄 <b>Troubleshooting:</b>
-1. Check if @refffrrr channel exists
-2. Verify bot has posting permission in channel
+🔄 <b>Please try:</b>
+1. Make sure @refffrrr channel exists
+2. Check if bot has posting permission
 3. Try with a different file
-4. Check file size (max 20MB)
+4. Use <code>/upload</code> command again
 
-📞 <b>Need assistance?</b> Contact the administrator.
-
-🚀 <b>Try again:</b> Send the file one more time.
+📞 <b>Need help?</b> Contact administrator.
             """
             
-            return {
-                'method': 'sendMessage', 
-                'chat_id': chat_id,
-                'text': error_text,
-                'parse_mode': 'HTML'
-            }
+            return jsonify(send_telegram_message(
+                chat_id, 
+                error_text,
+                parse_mode='HTML'
+            ))
             
     except Exception as e:
-        error_response = {
-            'method': 'sendMessage',
-            'chat_id': message.get('chat', {}).get('id'),
-            'text': f'❌ <b>System Error:</b>\n<code>{str(e)}</code>\n\nPlease try again later.',
-            'parse_mode': 'HTML'
-        }
-        return error_response
+        # Clear session on error
+        if user_id in UPLOAD_SESSIONS:
+            del UPLOAD_SESSIONS[user_id]
+            
+        return jsonify(send_telegram_message(
+            chat_id,
+            f'❌ <b>Upload Error:</b> <code>{str(e)}</code>\n\n'
+            f'🔄 <b>Please try again with</b> <code>/upload</code>',
+            parse_mode='HTML'
+        ))
 
 def forward_to_channel(chat_id, message_id, target_channel='@refffrrr'):
-    """Forward message to channel with error handling"""
+    """Forward message to channel"""
     try:
         bot_token = os.environ.get('BOT_TOKEN')
-        if not bot_token:
-            return {'ok': False, 'description': 'Bot token not configured'}
-        
         forward_data = {
             'chat_id': target_channel,
             'from_chat_id': chat_id,
@@ -187,84 +206,22 @@ def forward_to_channel(chat_id, message_id, target_channel='@refffrrr'):
         forward_url = f"https://api.telegram.org/bot{bot_token}/forwardMessage"
         response = requests.post(forward_url, json=forward_data, timeout=10)
         return response.json()
-        
-    except requests.exceptions.Timeout:
-        return {'ok': False, 'description': 'Request timeout - try again'}
-    except requests.exceptions.ConnectionError:
-        return {'ok': False, 'description': 'Connection error - check internet'}
     except Exception as e:
-        return {'ok': False, 'description': f'Forwarding error: {str(e)}'}
+        return {'ok': False, 'description': str(e)}
 
-def get_telegram_file_url(file_id):
-    """Get direct URL for Telegram file"""
-    try:
-        bot_token = os.environ.get('BOT_TOKEN')
-        if not bot_token:
-            return None
-            
-        file_info_url = f"https://api.telegram.org/bot{bot_token}/getFile?file_id={file_id}"
-        response = requests.get(file_info_url, timeout=10)
-        file_info = response.json()
-        
-        if file_info.get('ok'):
-            file_path = file_info['result']['file_path']
-            return f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
-        return None
-    except Exception as e:
-        print(f"Error getting file URL: {e}")
-        return None
+def send_telegram_message(chat_id, text, parse_mode='HTML'):
+    """Send message with HTML parse mode"""
+    return {
+        'method': 'sendMessage',
+        'chat_id': chat_id,
+        'text': text,
+        'parse_mode': parse_mode
+    }
 
-def get_file_id_from_message(message, media_type):
-    """Extract file ID from different media types"""
-    try:
-        if media_type == 'photo':
-            # Get the highest quality photo (last in array)
-            photos = message.get('photo', [])
-            return photos[-1].get('file_id') if photos else None
-        elif media_type in ['document', 'video', 'audio', 'voice']:
-            media_obj = message.get(media_type, {})
-            return media_obj.get('file_id')
-        return None
-    except Exception as e:
-        print(f"Error getting file ID: {e}")
-        return None
-
-def get_file_size(message, media_type):
-    """Get file size in readable format"""
-    try:
-        if media_type == 'photo':
-            photos = message.get('photo', [])
-            if photos:
-                file_size = photos[-1].get('file_size', 0)
-        elif media_type in ['document', 'video', 'audio', 'voice']:
-            media_obj = message.get(media_type, {})
-            file_size = media_obj.get('file_size', 0)
-        else:
-            return None
-            
-        if file_size:
-            if file_size < 1024:
-                return f"{file_size} B"
-            elif file_size < 1024 * 1024:
-                return f"{file_size / 1024:.1f} KB"
-            else:
-                return f"{file_size / (1024 * 1024):.1f} MB"
-        return None
-    except Exception:
-        return None
-
-def get_mime_type(message, media_type):
-    """Get MIME type of the file"""
-    try:
-        if media_type in ['document', 'audio']:
-            media_obj = message.get(media_type, {})
-            return media_obj.get('mime_type', 'Unknown')
-        elif media_type == 'video':
-            return 'video/mp4'
-        elif media_type == 'photo':
-            return 'image/jpeg'
-        elif media_type == 'voice':
-            return 'audio/ogg'
-        return 'Unknown'
-    except Exception:
-        return 'Unknown'
+# Clean up old sessions (basic implementation)
+def cleanup_sessions():
+    """Clean up old upload sessions (production-এ proper cleanup লাগবে)"""
+    global UPLOAD_SESSIONS
+    # Simple cleanup - in production use proper TTL-based cleanup
+    if len(UPLOAD_SESSIONS) > 1000:
+        UPLOAD_SESSIONS.clear()
