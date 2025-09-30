@@ -3,7 +3,6 @@ import requests
 import re
 import os
 import logging
-from urllib.parse import urlparse, parse_qs
 
 # লগিং কনফিগারেশন
 logging.basicConfig(
@@ -47,7 +46,20 @@ def extract_youtube_thumbnail(video_url):
             'maxres': f'https://img.youtube.com/vi/{video_id}/maxresdefault.jpg'
         }
         
-        return thumbnails, None
+        # থাম্বনেইল ভ্যালিডেশন চেক
+        valid_thumbnails = {}
+        for quality, url in thumbnails.items():
+            try:
+                response = requests.head(url, timeout=5)
+                if response.status_code == 200:
+                    valid_thumbnails[quality] = url
+            except:
+                continue
+        
+        if not valid_thumbnails:
+            return None, "কোন থাম্বনেইল পাওয়া যায়নি। ভিডিওটি পাবলিক কিনা চেক করুন।"
+        
+        return valid_thumbnails, None
         
     except Exception as e:
         logger.error(f"Thumbnail extraction error: {e}")
@@ -62,15 +74,18 @@ def handle_request():
         if not token:
             return jsonify({
                 'error': 'টোকেন প্রয়োজন',
-                'solution': 'URL এ ?token=YOUR_BOT_TOKEN যোগ করুন'
+                'solution': 'URL এ ?token=YOUR_BOT_TOKEN যোগ করুন',
+                'example': 'https://your-app.onrender.com/?token=123456:ABC-DEF'
             }), 400
         
         # GET request হ্যান্ডেল
         if request.method == 'GET':
             return jsonify({
-                'status': 'বট একটিভ',
-                'instruction': 'POST request এর মাধ্যমে YouTube লিংক সেন্ড করুন',
-                'usage': 'টেলিগ্রাম বটের ওয়েবহুক URL: https://your-domain.com/?token=YOUR_BOT_TOKEN'
+                'status': 'YouTube Thumbnail Bot Active 🚀',
+                'deployed_on': 'Render.com',
+                'instruction': 'টেলিগ্রাম বটের ওয়েবহুক URL হিসেবে সেট করুন',
+                'webhook_url': f'https://{request.host}/?token=YOUR_BOT_TOKEN',
+                'usage': 'YouTube লিংক সেন্ড করলে থাম্বনেইল দেবে'
             })
         
         # POST request হ্যান্ডেল
@@ -79,6 +94,8 @@ def handle_request():
             
             if not update:
                 return jsonify({'error': 'Invalid JSON data'}), 400
+            
+            logger.info(f"Update received: {update}")
             
             # মেসেজ ডেটা এক্সট্র্যাক্ট
             chat_id = None
@@ -93,22 +110,13 @@ def handle_request():
                 chat_id = update['channel_post']['chat']['id']
                 message_text = update['channel_post'].get('text', '')
                 message_id = update['channel_post'].get('message_id')
-            elif 'callback_query' in update:
-                # Callback query হ্যান্ডেল (যদি ইনলাইন বাটন ব্যবহার করেন)
-                chat_id = update['callback_query']['message']['chat']['id']
-                message_id = update['callback_query']['message']['message_id']
-                return jsonify({
-                    'method': 'answerCallbackQuery',
-                    'callback_query_id': update['callback_query']['id'],
-                    'text': 'Processing...'
-                })
             
             if not chat_id:
                 return jsonify({'error': 'চ্যাট আইডি পাওয়া যায়নি'}), 400
             
             # /start কমান্ড হ্যান্ডেল
             if message_text.startswith('/start'):
-                welcome_text = f"""
+                welcome_text = """
 🌟 <b>স্বাগতম YouTube Thumbnail Downloader Bot এ!</b> 🌟
 
 <b>ব্যবহার বিধি:</b>
@@ -126,7 +134,7 @@ def handle_request():
 /help - সাহায্য পেতে
 
 <b>উদাহরণ:</b>
-https://youtu.be/dQw4w9WgXcQ
+<code>https://youtu.be/dQw4w9WgXcQ</code>
                 """
                 
                 return jsonify({
@@ -174,6 +182,14 @@ https://youtu.be/dQw4w9WgXcQ
                 is_youtube_link = any(pattern in message_text for pattern in youtube_patterns)
                 
                 if is_youtube_link:
+                    # "Processing..." মেসেজ সেন্ড
+                    processing_response = {
+                        'method': 'sendMessage',
+                        'chat_id': chat_id,
+                        'text': '⏳ আপনার লিংক প্রসেস করা হচ্ছে...',
+                        'parse_mode': 'HTML'
+                    }
+                    
                     # থাম্বনেইল এক্সট্র্যাক্ট
                     thumbnails, error = extract_youtube_thumbnail(message_text)
                     
@@ -185,36 +201,41 @@ https://youtu.be/dQw4w9WgXcQ
                             'parse_mode': 'HTML'
                         })
                     
-                    # থাম্বনেইল বাটন সহ মেসেজ সেন্ড
+                    # থাম্বনেইল বাটন তৈরি
                     buttons = []
                     for quality, thumb_url in thumbnails.items():
-                        buttons.append([
-                            {
-                                'text': f"📷 {quality.upper()} কোয়ালিটি",
-                                'url': thumb_url
-                            }
-                        ])
+                        quality_names = {
+                            'default': 'ছোট',
+                            'medium': 'মধ্যম', 
+                            'high': 'বড়',
+                            'standard': 'স্ট্যান্ডার্ড',
+                            'maxres': 'সর্বোচ্চ'
+                        }
+                        quality_name = quality_names.get(quality, quality)
+                        buttons.append([{
+                            'text': f"📷 {quality_name} কোয়ালিটি",
+                            'url': thumb_url
+                        }])
                     
-                    # সবগুলো থাম্বনেইল দেখানোর জন্য বাটন
                     reply_markup = {'inline_keyboard': buttons}
                     
                     response_text = f"""
 <b>✅ থাম্বনেইল পাওয়া গেছে!</b>
 
-<b>ভিডিও লিংক:</b> {message_text}
+<b>ভিডিও লিংক:</b>
+<code>{message_text}</code>
 
-<b>থাম্বনেইল গুলো:</b>
-• <b>Default</b> - ছোট সাইজ (120×90)
-• <b>Medium</b> - মধ্যম কোয়ালিটি (320×180)  
-• <b>High</b> - উচ্চ কোয়ালিটি (480×360)
-• <b>Standard</b> - স্ট্যান্ডার্ড ডেফিনিশন (640×480)
-• <b>Max Resolution</b> - সর্বোচ্চ রেজোলিউশন (1280×720)
+<b>উপলব্ধ থাম্বনেইল:</b>
+{chr(10).join([f"• {quality_names.get(qual, qual)} কোয়ালিটি" for qual in thumbnails.keys()])}
 
 <b>নিচের বাটন থেকে আপনার পছন্দের থাম্বনেইল সিলেক্ট করুন:</b>
                     """
                     
-                    # প্রথম থাম্বনেইল প্রিভিউ হিসেবে সেন্ড
-                    preview_thumb = thumbnails.get('high', thumbnails['default'])
+                    # সর্বোচ্চ কোয়ালিটির থাম্বনেইল প্রিভিউ হিসেবে সেন্ড
+                    preview_thumb = thumbnails.get('maxres', 
+                                  thumbnails.get('standard', 
+                                  thumbnails.get('high', 
+                                  list(thumbnails.values())[0])))
                     
                     return jsonify({
                         'method': 'sendPhoto',
@@ -255,10 +276,13 @@ https://youtu.be/dQw4w9WgXcQ
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Health check endpoint for monitoring"""
-    return jsonify({'status': 'healthy', 'service': 'YouTube Thumbnail Bot'})
+    """Health check endpoint for Render"""
+    return jsonify({
+        'status': 'healthy', 
+        'service': 'YouTube Thumbnail Bot',
+        'deployed_on': 'Render.com'
+    })
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    # Production server ব্যবহার করুন
-    app.run(host='0.0.0.0', port=port)
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port, debug=False)
