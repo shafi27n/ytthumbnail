@@ -120,16 +120,16 @@ def handle_callback_query(callback_query):
             return jsonify({'ok': True})
         
         # Try to find callback handler in all modules
-        for module_name in COMMAND_HANDLERS.keys():
+        for command_name in COMMAND_HANDLERS.keys():
             try:
-                clean_module_name = module_name.replace('/', '')
+                clean_module_name = command_name.replace('/', '')
                 module = importlib.import_module(f'bot.handlers.{clean_module_name}')
                 if hasattr(module, 'handle_all_callbacks'):
                     result = module.handle_all_callbacks(callback_data, user_info, chat_id, message_id)
                     if result:
                         logger.info(f"✅ Callback handled by {clean_module_name}")
                         return result
-            except ImportError as e:
+            except ImportError:
                 continue
             except Exception as e:
                 logger.error(f"❌ Error in callback handler {clean_module_name}: {e}")
@@ -166,22 +166,31 @@ def handle_message(message):
                 if message_text.startswith(command):
                     logger.info(f"✅ Command matched: {command}")
                     result = handler(user_info, chat_id, message_text)
-                    return result if result else jsonify({'ok': True})
+                    
+                    # Handle different return types
+                    if isinstance(result, str):
+                        # If handler returns string, send as message
+                        return jsonify(send_telegram_message(chat_id, result, parse_mode='HTML'))
+                    elif result is not None:
+                        # If handler returns JSON response
+                        return result
+                    else:
+                        # If handler returns None, send default response
+                        return jsonify({'ok': True})
             
             # Check for text handler (for form sessions)
             if 'text' in SPECIAL_HANDLERS:
-                logger.info("🔄 Checking text handler")
+                logger.info("🔄 Checking text handler for session")
                 text_response = SPECIAL_HANDLERS['text'](message)
                 if text_response:
                     return text_response
             
             # Default response for non-command messages
-            available_commands = "\n".join([f"• <b>{cmd}</b>" for cmd in COMMAND_HANDLERS.keys()])
             return jsonify(send_telegram_message(
                 chat_id, 
                 f"👋 <b>Hello {user_info.get('first_name', 'Friend')}!</b>\n\n"
-                f"📋 <b>Available Commands:</b>\n{available_commands}\n\n"
-                f"💡 <b>Try:</b> <b>/menu</b> for interactive menu"
+                f"💡 <b>Available commands:</b> /start, /menu, /form, /help\n\n"
+                f"📱 <b>Try:</b> <b>/menu</b> for interactive options"
             ))
         
         # Handle media messages with special handlers
@@ -230,26 +239,14 @@ def health_check():
         'timestamp': datetime.now().isoformat()
     }), 200
 
-@app.route('/webhook', methods=['POST'])
-def webhook_handler():
-    """Alternative webhook endpoint"""
-    return handle_request()
-
 @app.route('/debug/handlers', methods=['GET'])
 def debug_handlers():
     """Debug endpoint to see loaded handlers"""
-    handler_details = {}
-    
-    for command, handler in COMMAND_HANDLERS.items():
-        handler_details[command] = {
-            'function': handler.__name__,
-            'module': handler.__module__
-        }
-    
     return jsonify({
-        'command_handlers': handler_details,
+        'command_handlers': list(COMMAND_HANDLERS.keys()),
         'special_handlers': list(SPECIAL_HANDLERS.keys()),
-        'total_loaded': len(COMMAND_HANDLERS)
+        'total_loaded': len(COMMAND_HANDLERS),
+        'status': 'working'
     })
 
 if __name__ == '__main__':
