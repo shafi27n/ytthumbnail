@@ -1,10 +1,6 @@
 from flask import Flask, request, jsonify
-import requests
-import re
 import os
 import logging
-import base64
-from io import BytesIO
 
 # লগিং কনফিগারেশন
 logging.basicConfig(
@@ -15,84 +11,8 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-def extract_youtube_thumbnail(video_url):
-    """
-    YouTube ভিডিও URL থেকে থাম্বনেইল লিংক বের করে
-    """
-    try:
-        # ভিডিও ID এক্সট্র্যাক্ট
-        video_id = None
-        
-        # বিভিন্ন YouTube URL ফরম্যাট হ্যান্ডেল করা
-        patterns = [
-            r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([a-zA-Z0-9_-]{11})',
-            r'youtube\.com/watch\?.*v=([a-zA-Z0-9_-]{11})',
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, video_url)
-            if match:
-                video_id = match.group(1)
-                break
-        
-        if not video_id:
-            return None, "ভালিড YouTube লিংক প্রদান করুন।"
-        
-        # বিভিন্ন কোয়ালিটির থাম্বনেইল URLs
-        thumbnails = {
-            'default': f'https://img.youtube.com/vi/{video_id}/default.jpg',
-            'medium': f'https://img.youtube.com/vi/{video_id}/mqdefault.jpg',
-            'high': f'https://img.youtube.com/vi/{video_id}/hqdefault.jpg',
-            'standard': f'https://img.youtube.com/vi/{video_id}/sddefault.jpg',
-            'maxres': f'https://img.youtube.com/vi/{video_id}/maxresdefault.jpg'
-        }
-        
-        return thumbnails, None
-        
-    except Exception as e:
-        logger.error(f"Thumbnail extraction error: {e}")
-        return None, f"ত্রুটি: {str(e)}"
-
-def is_youtube_url(text):
-    """চেক করে দেখে টেক্সট YouTube URL কিনা"""
-    youtube_patterns = [
-        r'^(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)[a-zA-Z0-9_-]{11}',
-        r'youtube\.com/watch\?.*v=[a-zA-Z0-9_-]{11}',
-    ]
-    
-    for pattern in youtube_patterns:
-        if re.search(pattern, text):
-            return True
-    return False
-
-def download_image(image_url):
-    """
-    ইমেজ URL থেকে ডেটা ডাউনলোড করে
-    """
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        response = requests.get(image_url, timeout=10, headers=headers)
-        response.raise_for_status()
-        return response.content, None
-    except Exception as e:
-        logger.error(f"Image download error: {e}")
-        return None, f"ইমেজ ডাউনলোড করতে সমস্যা: {str(e)}"
-
-def send_telegram_photo(chat_id, photo_url, caption, reply_markup=None, reply_to_message_id=None):
-    """
-    Telegram-এ ফটো সেন্ড করার জন্য সহায়ক ফাংশন
-    """
-    return {
-        'method': 'sendPhoto',
-        'chat_id': chat_id,
-        'photo': photo_url,  # সরাসরি URL ব্যবহার করি
-        'caption': caption,
-        'parse_mode': 'Markdown',
-        'reply_markup': reply_markup,
-        'reply_to_message_id': reply_to_message_id
-    }
+# ইউজার স্টেট স্টোর করার জন্য ডিকশনারি
+user_states = {}
 
 def send_telegram_message(chat_id, text, parse_mode='Markdown', disable_web_page_preview=True, reply_markup=None):
     """
@@ -107,6 +27,46 @@ def send_telegram_message(chat_id, text, parse_mode='Markdown', disable_web_page
         'reply_markup': reply_markup
     }
 
+def get_main_menu():
+    """
+    মেইন মেনু বাটন তৈরি
+    """
+    return {
+        'inline_keyboard': [
+            [
+                {'text': 'ℹ️ আমার সম্পর্কে', 'callback_data': 'about'},
+                {'text': '📊 সার্ভিসেস', 'callback_data': 'services'}
+            ],
+            [
+                {'text': '👤 প্রোফাইল', 'callback_data': 'profile'},
+                {'text': '🛠️ সেটিংস', 'callback_data': 'settings'}
+            ],
+            [
+                {'text': '📞 যোগাযোগ', 'callback_data': 'contact'}
+            ]
+        ]
+    }
+
+def get_services_menu():
+    """
+    সার্ভিসেস মেনু বাটন তৈরি
+    """
+    return {
+        'inline_keyboard': [
+            [
+                {'text': '📝 নোট', 'callback_data': 'notes'},
+                {'text': '🔄 কনভার্টার', 'callback_data': 'converter'}
+            ],
+            [
+                {'text': '📊 ক্যালকুলেটর', 'callback_data': 'calculator'},
+                {'text': '🎯 গেমস', 'callback_data': 'games'}
+            ],
+            [
+                {'text': '🔙 মেনুতে ফিরে যান', 'callback_data': 'main_menu'}
+            ]
+        ]
+    }
+
 def answer_callback_query(callback_query_id, text, show_alert=False):
     """
     ক্যালব্যাক কুয়েরি উত্তর দেওয়ার জন্য সহায়ক ফাংশন
@@ -116,6 +76,29 @@ def answer_callback_query(callback_query_id, text, show_alert=False):
         'callback_query_id': callback_query_id,
         'text': text,
         'show_alert': show_alert
+    }
+
+def edit_message_reply_markup(chat_id, message_id, reply_markup):
+    """
+    মেসেজের রিপ্লাই মার্কআপ এডিট করার জন্য
+    """
+    return {
+        'method': 'editMessageReplyMarkup',
+        'chat_id': chat_id,
+        'message_id': message_id,
+        'reply_markup': reply_markup
+    }
+
+def edit_message_text(chat_id, message_id, text, parse_mode='Markdown'):
+    """
+    মেসেজ টেক্সট এডিট করার জন্য
+    """
+    return {
+        'method': 'editMessageText',
+        'chat_id': chat_id,
+        'message_id': message_id,
+        'text': text,
+        'parse_mode': parse_mode
     }
 
 @app.route('/', methods=['GET', 'POST'])
@@ -133,9 +116,9 @@ def handle_request():
         # GET request হ্যান্ডেল - শুধু টোকেন ভ্যালিডেশন
         if request.method == 'GET':
             return jsonify({
-                'status': 'Bot is running',
+                'status': 'Interactive Bot is running',
                 'token_received': True,
-                'message': 'YouTube Thumbnail Downloader Bot is ready!'
+                'message': 'Interactive Question-Answer Bot is ready!'
             })
 
         # POST request হ্যান্ডেল - টেলিগ্রাম আপডেট
@@ -155,48 +138,141 @@ def handle_request():
                 callback_query_id = callback_data['id']
                 data = callback_data['data']
                 
-                # ক্যালব্যাক ডেটা পার্স করা (format: quality|video_id)
-                if '|' in data:
-                    quality, video_id = data.split('|', 1)
-                    
-                    # কোয়ালিটির নাম
-                    quality_names = {
-                        'default': {'name': 'ছোট', 'emoji': '🟢', 'size': '120×90'},
-                        'medium': {'name': 'মধ্যম', 'emoji': '🟡', 'size': '320×180'}, 
-                        'high': {'name': 'বড়', 'emoji': '🟠', 'size': '480×360'},
-                        'standard': {'name': 'স্ট্যান্ডার্ড', 'emoji': '🔵', 'size': '640×480'},
-                        'maxres': {'name': 'সর্বোচ্চ', 'emoji': '🔴', 'size': '1280×720'}
-                    }
-                    
-                    quality_info = quality_names.get(quality, {'name': quality, 'emoji': '📷', 'size': 'Unknown'})
-                    thumbnail_url = f'https://img.youtube.com/vi/{video_id}/{quality}.jpg'
-                    
-                    # প্রথমে ক্যালব্যাক কুয়েরি উত্তর দেই
-                    responses = [
-                        answer_callback_query(callback_query_id, f"{quality_info['emoji']} {quality_info['name']} কোয়ালিটি থাম্বনেইল প্রস্তুত হচ্ছে...", False)
-                    ]
-                    
-                    # তারপর ফটো সেন্ড করি
-                    caption = f"""🖼️ **{quality_info['emoji']} {quality_info['name']} কোয়ালিটি থাম্বনেইল**
-
-📏 **রেজোলিউশন:** `{quality_info['size']}`
-🎯 **কোয়ালিটি:** `{quality}`
-🆔 **ভিডিও আইডি:** `{video_id}`
-
-✅ **থাম্বনেইল সফলভাবে ডাউনলোড হয়েছে!**"""
-                    
+                responses = []
+                
+                if data == 'main_menu':
+                    # মেইন মেনু দেখাও
                     responses.append(
-                        send_telegram_photo(
+                        edit_message_text(
                             chat_id=chat_id,
-                            photo_url=thumbnail_url,
-                            caption=caption,
-                            reply_to_message_id=message_id
+                            message_id=message_id,
+                            text="🏠 **মেইন মেনু**\n\nনিচের অপশন থেকে আপনার পছন্দের মেনু সিলেক্ট করুন:",
+                            reply_markup=get_main_menu()
                         )
                     )
-                    
-                    return jsonify(responses) if len(responses) > 1 else jsonify(responses[0])
+                    responses.append(answer_callback_query(callback_query_id, "মেইন মেনু"))
                 
-                return jsonify(answer_callback_query(callback_query_id, "ইনভ্যালিড রিকোয়েস্ট", True))
+                elif data == 'about':
+                    responses.append(
+                        edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text="""ℹ️ **আমার সম্পর্কে**
+
+🤖 **ইন্টার‍্যাক্টিভ বট**
+এটি একটি ইন্টেলিজেন্ট ইন্টার‍্যাক্টিভ বট যা আপনার প্রশ্নের উত্তর দিতে পারে এবং বিভিন্ন সার্ভিস প্রদান করে।
+
+🌟 **ফিচারস:**
+• প্রশ্ন-উত্তর সিস্টেম
+• বিভিন্ন ইউটিলিটি টুলস
+• ইউজার-ফ্রেন্ডলি ইন্টারফেস
+• রিয়েল-টাইম কমিউনিকেশন
+
+💡 **ব্যবহার:** সরাসরি প্রশ্ন করুন অথবা মেনু থেকে সার্ভিস সিলেক্ট করুন।"""
+                        )
+                    )
+                    responses.append(answer_callback_query(callback_query_id, "আমার সম্পর্কে তথ্য"))
+                
+                elif data == 'services':
+                    responses.append(
+                        edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text="""📊 **সার্ভিসেস মেনু**
+
+নিচের সার্ভিসগুলো থেকে আপনার পছন্দেরটি সিলেক্ট করুন:
+
+• 📝 **নোট** - নোট সংরক্ষণ ও ব্যবস্থাপনা
+• 🔄 **কনভার্টার** - বিভিন্ন ইউনিট কনভার্সন
+• 📊 **ক্যালকুলেটর** - গাণিতিক ক্যালকুলেশন
+• 🎯 **গেমস** - মজাদার গেমস
+
+সার্ভিস সিলেক্ট করতে নিচের বাটন ব্যবহার করুন:""",
+                            reply_markup=get_services_menu()
+                        )
+                    )
+                    responses.append(answer_callback_query(callback_query_id, "সার্ভিসেস মেনু"))
+                
+                elif data == 'profile':
+                    # ইউজার প্রোফাইল দেখাও
+                    user_state = user_states.get(chat_id, {})
+                    name = user_state.get('name', 'অজানা')
+                    age = user_state.get('age', 'অজানা')
+                    
+                    responses.append(
+                        edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text=f"""👤 **আপনার প্রোফাইল**
+
+📛 **নাম:** {name}
+🎂 **বয়স:** {age}
+🆔 **ইউজার আইডি:** `{chat_id}`
+📅 **রেজিস্ট্রেশন:** {'সম্পন্ন' if user_state else 'অসম্পূর্ণ'}
+
+💡 **প্রোফাইল আপডেট করতে** `/profile` কমান্ড ব্যবহার করুন।"""
+                        )
+                    )
+                    responses.append(answer_callback_query(callback_query_id, "প্রোফাইল তথ্য"))
+                
+                elif data == 'settings':
+                    responses.append(
+                        edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text="""🛠️ **সেটিংস**
+
+⚙️ **সেটিংস অপশন:**
+• 🔔 নোটিফিকেশন সেটিংস
+• 🌐 ভাষা সেটিংস
+• 🔒 প্রাইভেসি সেটিংস
+• 📱 থিম সেটিংস
+
+🔧 **সেটিংস কনফিগার করতে** সরাসরি মেসেজের মাধ্যমে আমাকে জানান।"""
+                        )
+                    )
+                    responses.append(answer_callback_query(callback_query_id, "সেটিংস মেনু"))
+                
+                elif data == 'contact':
+                    responses.append(
+                        edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text="""📞 **যোগাযোগ**
+
+📧 **ইমেইল:** example@email.com
+🌐 **ওয়েবসাইট:** www.example.com
+📱 **ফোন:** +8801XXXXXXXXX
+
+💬 **সাপোর্ট:** সরাসরি মেসেজের মাধ্যমে যোগাযোগ করুন।
+
+📍 **ঠিকানা:** 
+আপনার প্রতিষ্ঠানের ঠিকানা
+ঢাকা, বাংলাদেশ"""
+                        )
+                    )
+                    responses.append(answer_callback_query(callback_query_id, "যোগাযোগ তথ্য"))
+                
+                elif data in ['notes', 'converter', 'calculator', 'games']:
+                    service_names = {
+                        'notes': '📝 নোট ম্যানেজার',
+                        'converter': '🔄 ইউনিট কনভার্টার',
+                        'calculator': '📊 ক্যালকুলেটর',
+                        'games': '🎯 গেমস'
+                    }
+                    
+                    service_name = service_names.get(data, data)
+                    responses.append(
+                        edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text=f"🔄 **{service_name}**\n\nএই সার্ভিসটি খুব শীঘ্রই আসছে! 🚀\n\nবর্তমানে ডেভেলপমেন্ট চলছে। আপাতত মেইন মেনু থেকে অন্য সার্ভিস ব্যবহার করুন।",
+                            reply_markup=get_services_menu()
+                        )
+                    )
+                    responses.append(answer_callback_query(callback_query_id, f"{service_name} সার্ভিস"))
+                
+                return jsonify(responses) if len(responses) > 1 else jsonify(responses[0])
             
             # মেসেজ ডেটা এক্সট্র্যাক্ট
             chat_id = None
@@ -214,32 +290,38 @@ def handle_request():
             if not chat_id:
                 return jsonify({'error': 'Chat ID not found'}), 400
 
+            # ইউজার স্টেট চেক
+            user_state = user_states.get(chat_id, {})
+            current_step = user_state.get('step', None)
+
             # /start কমান্ড হ্যান্ডেল
             if message_text.startswith('/start'):
                 welcome_text = """
-🎬 **স্বাগতম YouTube Thumbnail Downloader Bot এ!** 🎬
+🤖 **স্বাগতম ইন্টার‍্যাক্টিভ বট এ!** 🤖
 
-📥 **ব্যবহার বিধি:**
-1. যেকোনো YouTube ভিডিওর লিংক সেন্ড করুন
-2. বট স্বয়ংক্রিয়ভাবে সবগুলো থাম্বনেইল অপশন দেখাবে
-3. আপনার পছন্দমত থাম্বনেইল সিলেক্ট করুন
+আমি একটি ইন্টেলিজেন্ট বট যে আপনার প্রশ্নের উত্তর দিতে এবং বিভিন্ন সার্ভিস প্রদান করতে পারি।
 
-🔗 **সাপোর্টেড লিংক ফরম্যাট:**
-• `https://youtube.com/watch?v=VIDEO_ID`
-• `https://youtu.be/VIDEO_ID`  
-• `https://www.youtube.com/embed/VIDEO_ID`
+🎯 **আমি যা করতে পারি:**
+• আপনার প্রশ্নের উত্তর দিতে
+• বিভিন্ন ইউটিলিটি সার্ভিস প্রদান করতে
+• আপনার তথ্য সংরক্ষণ করতে
+• ইন্টার‍্যাক্টিভ কমিউনিকেশন করতে
 
-📋 **উদাহরণ:**
-`https://youtu.be/dQw4w9WgXcQ`
-`https://www.youtube.com/watch?v=dQw4w9WgXcQ`
+📋 **ব্যবহার বিধি:**
+1. সরাসরি প্রশ্ন করুন
+2. মেনু থেকে সার্ভিস সিলেক্ট করুন  
+3. ধাপে ধাপে নির্দেশনা অনুসরণ করুন
 
-👉 **এখনই একটি YouTube লিংক সেন্ড করে ট্রাই করুন!**
+👇 **শুরু করতে নিচের মেনু ব্যবহার করুন:**
                 """
+                
+                # ইউজার স্টেট রিসেট
+                user_states[chat_id] = {'step': None}
                 
                 return jsonify(send_telegram_message(
                     chat_id=chat_id,
                     text=welcome_text,
-                    disable_web_page_preview=True
+                    reply_markup=get_main_menu()
                 ))
 
             # /help কমান্ড হ্যান্ডেল
@@ -247,25 +329,21 @@ def handle_request():
                 help_text = """
 🆘 **সাহায্য:** 🆘
 
-এই বট YouTube ভিডিও থেকে হাই-কোয়ালিটি থাম্বনেইল ডাউনলোড করতে সাহায্য করে।
+📖 **কমান্ড লিস্ট:**
+• `/start` - বট শুরু করুন
+• `/help` - সাহায্য দেখুন  
+• `/profile` - প্রোফাইল সেটআপ
+• `/menu` - মেইন মেনু দেখুন
 
-📖 **কিভাবে ব্যবহার করবেন:**
-1. YouTube ভিডিওর লিংক কপি করুন
-2. বটে পেস্ট করুন
-3. বিভিন্ন কোয়ালিটির থাম্বনেইল দেখুন
-4. আপনার পছন্দের থাম্বনেইল সিলেক্ট করুন
+💡 **কিভাবে ব্যবহার করবেন:**
+1. সরাসরি যেকোনো প্রশ্ন করুন
+2. মেনু থেকে সার্ভিস সিলেক্ট করুন
+3. বটের প্রশ্নের উত্তর দিন ধাপে ধাপে
 
-🎯 **কোয়ালিটি অপশন:**
-• 🟢 ছোট (120×90)
-• 🟡 মধ্যম (320×180) 
-• 🟠 বড় (480×360)
-• 🔵 স্ট্যান্ডার্ড (640×480)
-• 🔴 সর্বোচ্চ (1280×720)
-
-⚠️ **সমস্যা হলে:**
-• লিংকটি চেক করুন
-• নেটওয়ার্ক কানেকশন চেক করুন
-• আবার চেষ্টা করুন
+🎯 **উদাহরণ:**
+• "আপনার নাম কি?"
+• "আজকের তারিখ কি?"
+• "ক্যালকুলেটর ব্যবহার করতে চাই"
 
 🛠️ **সাপোর্ট:** সমস্যা হলে /start কমান্ড দিয়ে আবার শুরু করুন।
                 """
@@ -275,118 +353,105 @@ def handle_request():
                     text=help_text
                 ))
 
-            # YouTube লিংক চেক
-            elif is_youtube_url(message_text):
-                # থাম্বনেইল এক্সট্র্যাক্ট
-                thumbnails, error = extract_youtube_thumbnail(message_text)
-                
-                if error:
-                    return jsonify(send_telegram_message(
-                        chat_id=chat_id,
-                        text=f"❌ {error}"
-                    ))
-                
-                # ভিডিও ID এক্সট্র্যাক্ট
-                video_id = None
-                patterns = [
-                    r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([a-zA-Z0-9_-]{11})',
-                ]
-                
-                for pattern in patterns:
-                    match = re.search(pattern, message_text)
-                    if match:
-                        video_id = match.group(1)
-                        break
-                
-                if not video_id:
-                    return jsonify(send_telegram_message(
-                        chat_id=chat_id,
-                        text="❌ ভিডিও ID খুঁজে পাওয়া যায়নি।"
-                    ))
-                
-                # ইনলাইন বাটন তৈরি
-                buttons = []
-                row = []
-                
-                quality_info = {
-                    'default': {'name': 'ছোট', 'emoji': '🟢'},
-                    'medium': {'name': 'মধ্যম', 'emoji': '🟡'},
-                    'high': {'name': 'বড়', 'emoji': '🟠'},
-                    'standard': {'name': 'স্ট্যান্ডার্ড', 'emoji': '🔵'},
-                    'maxres': {'name': 'সর্বোচ্চ', 'emoji': '🔴'}
-                }
-                
-                for i, quality in enumerate(['default', 'medium', 'high', 'standard', 'maxres']):
-                    if quality in thumbnails:
-                        quality_data = quality_info[quality]
-                        row.append({
-                            'text': f"{quality_data['emoji']} {quality_data['name']}",
-                            'callback_data': f"{quality}|{video_id}"
-                        })
-                        
-                        # প্রতি row এ 2টি বাটন
-                        if len(row) == 2:
-                            buttons.append(row)
-                            row = []
-                
-                # শেষ row যোগ করুন
-                if row:
-                    buttons.append(row)
-                
-                reply_markup = {'inline_keyboard': buttons}
-                
-                response_text = f"""
-✅ **থাম্বনেইল পাওয়া গেছে!**
-
-📹 **ভিডিও লিংক:**
-`{message_text}`
-
-🎯 **উপলব্ধ থাম্বনেইল কোয়ালিটি:**
-• 🟢 ছোট (120×90) - ডিফল্ট
-• 🟡 মধ্যম (320×180) - মধ্যম কোয়ালিটি  
-• 🟠 বড় (480×360) - হাই কোয়ালিটি
-• 🔵 স্ট্যান্ডার্ড (640×480) - SD কোয়ালিটি
-• 🔴 সর্বোচ্চ (1280×720) - HD কোয়ালিটি
-
-👇 **নিচের বাটন থেকে আপনার পছন্দের থাম্বনেইল সিলেক্ট করুন:**
-                """
-                
-                # সর্বোচ্চ কোয়ালিটির থাম্বনেইল প্রিভিউ হিসেবে সেন্ড
-                preview_thumb = thumbnails.get('maxres', 
-                              thumbnails.get('standard', 
-                              thumbnails.get('high', 
-                              list(thumbnails.values())[0])))
-                
-                return jsonify(send_telegram_photo(
-                    chat_id=chat_id,
-                    photo_url=preview_thumb,
-                    caption=response_text,
-                    reply_markup=reply_markup
-                ))
-
-            # যদি YouTube লিংক না হয়
-            else:
+            # /profile কমান্ড হ্যান্ডেল
+            elif message_text.startswith('/profile'):
+                user_states[chat_id] = {'step': 'asking_name'}
                 return jsonify(send_telegram_message(
                     chat_id=chat_id,
-                    text="""
-❌ **ইনভ্যালিড লিংক**
-
-দয়া করে একটি বৈধ YouTube লিংক সেন্ড করুন।
-
-🔗 **সাপোর্টেড ফরম্যাট:**
-• `https://youtube.com/watch?v=VIDEO_ID`
-• `https://youtu.be/VIDEO_ID`
-• `https://www.youtube.com/embed/VIDEO_ID`
-
-📋 **উদাহরণ:**
-`https://youtu.be/dQw4w9WgXcQ`
-`https://www.youtube.com/watch?v=dQw4w9WgXcQ`
-
-💡 **সাহায্যের জন্য** `/help` কমান্ড ব্যবহার করুন।
-                    """,
-                    disable_web_page_preview=True
+                    text="👤 **প্রোফাইল সেটআপ**\n\nআপনার নাম কি? 📛\n\n(প্রতিটি ধাপে শুধু উত্তরটি লিখুন)"
                 ))
-    
+
+            # /menu কমান্ড হ্যান্ডেল
+            elif message_text.startswith('/menu'):
+                return jsonify(send_telegram_message(
+                    chat_id=chat_id,
+                    text="🏠 **মেইন মেনু**\n\nনিচের অপশন থেকে আপনার পছন্দের মেনু সিলেক্ট করুন:",
+                    reply_markup=get_main_menu()
+                ))
+
+            # ইউজার স্টেট অনুযায়ী প্রসেস
+            elif current_step == 'asking_name':
+                user_states[chat_id] = {
+                    'step': 'asking_age',
+                    'name': message_text
+                }
+                return jsonify(send_telegram_message(
+                    chat_id=chat_id,
+                    text=f"ধন্যবাদ {message_text}! 🎉\n\nএখন আপনার বয়স কি? 🎂"
+                ))
+
+            elif current_step == 'asking_age':
+                user_states[chat_id] = {
+                    'step': None,
+                    'name': user_state.get('name', 'অজানা'),
+                    'age': message_text
+                }
+                return jsonify(send_telegram_message(
+                    chat_id=chat_id,
+                    text=f"""✅ **প্রোফাইল সম্পূর্ণ!** ✅
+
+👤 **প্রোফাইল তথ্য:**
+📛 **নাম:** {user_state.get('name', 'অজানা')}
+🎂 **বয়স:** {message_text}
+
+আপনার প্রোফাইল সফলভাবে সংরক্ষণ করা হয়েছে! 🎉
+প্রোফাইল দেখতে মেনু থেকে '👤 প্রোফাইল' সিলেক্ট করুন।""",
+                    reply_markup=get_main_menu()
+                ))
+
+            # সাধারণ প্রশ্নের উত্তর
+            else:
+                # সাধারণ প্রশ্নের উত্তর দেওয়া
+                responses = []
+                
+                # কিছু কমন প্রশ্নের উত্তর
+                question = message_text.lower()
+                
+                if any(word in question for word in ['নাম', 'name', 'কে']):
+                    responses.append(send_telegram_message(
+                        chat_id=chat_id,
+                        text="🤖 **আমার নাম ইন্টার‍্যাক্টিভ বট!**\n\nআমি আপনার ব্যক্তিগত সহায়ক বট। আপনি কীভাবে সাহায্য চান?"
+                    ))
+                
+                elif any(word in question for word in ['হেলো', 'hello', 'হাই', 'hi']):
+                    responses.append(send_telegram_message(
+                        chat_id=chat_id,
+                        text="👋 **হ্যালো!**\n\nআমাকে জিজ্ঞাসা করুন, আমি কীভাবে আপনাকে সাহায্য করতে পারি? 😊"
+                    ))
+                
+                elif any(word in question for word in ['ধন্যবাদ', 'thank', 'thanks']):
+                    responses.append(send_telegram_message(
+                        chat_id=chat_id,
+                        text="😊 **আপনাকেও ধন্যবাদ!**\n\nআর কোনো সাহায্যের প্রয়োজন হলে জানাবেন।"
+                    ))
+                
+                elif any(word in question for word in ['সময়', 'time', 'তারিখ', 'date']):
+                    from datetime import datetime
+                    now = datetime.now()
+                    current_time = now.strftime("%Y-%m-%d %H:%M:%S")
+                    responses.append(send_telegram_message(
+                        chat_id=chat_id,
+                        text=f"🕒 **বর্তমান সময় ও তারিখ:**\n\n`{current_time}`\n\nবাংলাদেশ সময় অনুযায়ী"
+                    ))
+                
+                else:
+                    # ডিফল্ট রেসপন্স
+                    responses.append(send_telegram_message(
+                        chat_id=chat_id,
+                        text=f"""❓ **আপনার প্রশ্ন:** "{message_text}"
+
+আমি এই প্রশ্নের সরাসরি উত্তর দিতে পারছি না। তবে আপনি যা করতে পারেন:
+
+1. 🏠 **মেনু থেকে সার্ভিস সিলেক্ট করুন**
+2. 📋 **স্পেসিফিক প্রশ্ন করুন**
+3. 🛠️ **সাহায্যের জন্য** `/help` কমান্ড ব্যবহার করুন
+
+অথবা সরাসরি আমাকে বলুন আপনি কী করতে চান? 😊""",
+                        reply_markup=get_main_menu()
+                    ))
+                
+                return jsonify(responses[0])
+
     except Exception as e:
         logger.error(f'Global error: {e}')
         return jsonify({
@@ -403,7 +468,7 @@ def catch_all(path):
     
     if request.method == 'GET':
         return jsonify({
-            'status': 'Bot is running',
+            'status': 'Interactive Bot is running',
             'token_received': True,
             'endpoint': path
         })
