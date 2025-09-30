@@ -1,6 +1,7 @@
 import requests
 import json
 from flask import jsonify
+from datetime import datetime
 
 # Global session storage
 SESSIONS = {}
@@ -48,11 +49,12 @@ def handle_text(message):
         user_input = message.get('text', '').strip()
         
         if not user_input:
-            return jsonify(send_telegram_message(
-                message['chat']['id'],
-                "❌ <b>খালি নাম গ্রহণযোগ্য নয়!</b>\n\nআপনার সঠিক নাম লিখুন:",
-                parse_mode='HTML'
-            ))
+            return jsonify({
+                'method': 'sendMessage',
+                'chat_id': message['chat']['id'],
+                'text': "❌ <b>খালি নাম গ্রহণযোগ্য নয়!</b>\n\nআপনার সঠিক নাম লিখুন:",
+                'parse_mode': 'HTML'
+            })
         
         # Store name and move to photo step
         SESSIONS[user_id]['data']['name'] = user_input
@@ -69,11 +71,12 @@ def handle_text(message):
 <code>ছবি সিলেক্ট করে সেন্ড দিন...</code>
         """
         
-        return jsonify(send_telegram_message(
-            message['chat']['id'],
-            response_text,
-            parse_mode='HTML'
-        ))
+        return jsonify({
+            'method': 'sendMessage',
+            'chat_id': message['chat']['id'],
+            'text': response_text,
+            'parse_mode': 'HTML'
+        })
     
     return None
 
@@ -86,11 +89,12 @@ def handle_photo(message):
             # Get the largest available photo
             photos = message.get('photo', [])
             if not photos:
-                return jsonify(send_telegram_message(
-                    message['chat']['id'],
-                    "❌ <b>ছবি লোড করা যায়নি!</b>\n\nদয়া করে আবার ছবি সেন্ড করুন:",
-                    parse_mode='HTML'
-                ))
+                return jsonify({
+                    'method': 'sendMessage',
+                    'chat_id': message['chat']['id'],
+                    'text': "❌ <b>ছবি লোড করা যায়নি!</b>\n\nদয়া করে আবার ছবি সেন্ড করুন:",
+                    'parse_mode': 'HTML'
+                })
             
             # Get the best quality photo (last in array is largest)
             photo_info = photos[-1]
@@ -104,11 +108,12 @@ def handle_photo(message):
             
         except Exception as e:
             error_msg = f"❌ <b>ত্রুটি:</b> ছবি প্রসেস করতে সমস্যা হয়েছে\n\n<code>{str(e)}</code>"
-            return jsonify(send_telegram_message(
-                message['chat']['id'],
-                error_msg,
-                parse_mode='HTML'
-            ))
+            return jsonify({
+                'method': 'sendMessage',
+                'chat_id': message['chat']['id'],
+                'text': error_msg,
+                'parse_mode': 'HTML'
+            })
     
     return None
 
@@ -136,11 +141,13 @@ def process_form_completion(user_id, chat_id):
         """
         
         # Send photo with caption to group
-        group_response = send_telegram_photo(
-            GROUP_ID,
-            photo_file_id,
-            group_message
-        )
+        group_response = {
+            'method': 'sendPhoto',
+            'chat_id': GROUP_ID,
+            'photo': photo_file_id,
+            'caption': group_message,
+            'parse_mode': 'HTML'
+        }
         
         # Prepare success message for user
         success_text = f"""
@@ -160,11 +167,12 @@ def process_form_completion(user_id, chat_id):
         del SESSIONS[user_id]
         
         # Send success message to user
-        return jsonify(send_telegram_message(
-            chat_id,
-            success_text,
-            parse_mode='HTML'
-        ))
+        return jsonify({
+            'method': 'sendMessage',
+            'chat_id': chat_id,
+            'text': success_text,
+            'parse_mode': 'HTML'
+        })
         
     except Exception as e:
         # Clear session on error
@@ -178,26 +186,12 @@ def process_form_completion(user_id, chat_id):
 
 দয়া করে আবার চেষ্টা করুন: /form
         """
-        return jsonify(send_telegram_message(
-            chat_id,
-            error_text,
-            parse_mode='HTML'
-        ))
-
-def handle_cancel(message):
-    """Handle form cancellation"""
-    user_id = message.get('from', {}).get('id')
-    
-    if user_id in SESSIONS and SESSIONS[user_id]['command'] == 'form':
-        del SESSIONS[user_id]
-        
-        return jsonify(send_telegram_message(
-            message['chat']['id'],
-            "❌ <b>ফর্ম ক্যানসেল করা হয়েছে!</b>\n\nআপনি আবার শুরু করতে পারেন: /form",
-            parse_mode='HTML'
-        ))
-    
-    return None
+        return jsonify({
+            'method': 'sendMessage',
+            'chat_id': chat_id,
+            'text': error_text,
+            'parse_mode': 'HTML'
+        })
 
 # Utility functions
 def send_telegram_message(chat_id, text, parse_mode='HTML'):
@@ -221,7 +215,6 @@ def send_telegram_photo(chat_id, photo_file_id, caption, parse_mode='HTML'):
 
 def get_current_time():
     """Get current time string"""
-    from datetime import datetime
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 def is_in_session(message, expected_command=None):
@@ -233,15 +226,9 @@ def is_in_session(message, expected_command=None):
         return True
     return False
 
-# Cancel command handler
-def handle_cancel_command(user_info, chat_id, message_text):
-    """Handle /cancel command"""
-    user_id = user_info.get('id')
-    
-    if user_id in SESSIONS:
-        command_name = SESSIONS[user_id].get('command', 'unknown')
-        del SESSIONS[user_id]
-        
-        return f"❌ <b>{command_name} কমান্ড ক্যানসেল করা হয়েছে!</b>\n\nআপনি নতুন কমান্ড ব্যবহার করতে পারেন।"
-    else:
-        return "ℹ️ <b>কোন একটিভ সেশন নেই!</b>\n\nক্যানসেল করার জন্য কোনো সেশন চালু নেই।"
+# Callback handler for menu integration
+def handle_all_callbacks(callback_data, user_info, chat_id, message_id):
+    """Handle form-related callbacks"""
+    if callback_data == 'start_form':
+        return handle_form(user_info, chat_id, "")
+    return None
