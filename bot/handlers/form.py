@@ -2,6 +2,7 @@ import requests
 import json
 from flask import jsonify
 from datetime import datetime
+import os
 
 # Global session storage
 SESSIONS = {}
@@ -117,6 +118,30 @@ def handle_photo(message):
     
     return None
 
+def send_to_telegram_api(method, data):
+    """Send actual request to Telegram API"""
+    try:
+        bot_token = os.environ.get('BOT_TOKEN')
+        if not bot_token:
+            print("❌ BOT_TOKEN not found in environment variables")
+            return None
+            
+        url = f"https://api.telegram.org/bot{bot_token}/{method}"
+        headers = {'Content-Type': 'application/json'}
+        
+        response = requests.post(url, json=data, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            print(f"✅ Telegram API request successful: {method}")
+            return response.json()
+        else:
+            print(f"❌ Telegram API error: {response.status_code} - {response.text}")
+            return None
+            
+    except Exception as e:
+        print(f"❌ Error sending to Telegram API: {e}")
+        return None
+
 def process_form_completion(user_id, chat_id):
     """Process completed form and send to group"""
     try:
@@ -125,8 +150,8 @@ def process_form_completion(user_id, chat_id):
         photo_file_id = user_data.get('photo_file_id')
         user_info = user_data.get('user_info', {})
         
-        # Group ID - REPLACE WITH YOUR ACTUAL GROUP ID
-        GROUP_ID = "@refffrrr"  # Change this to your actual group username or ID
+        # Group ID - আপনার আসল গ্রুপ ইউজারনেম বা ID দিয়ে পরিবর্তন করুন
+        GROUP_ID = "@refffrrr"  # অথবা "-123456789" গ্রুপ ID
         
         # Prepare message for group
         group_message = f"""
@@ -140,17 +165,29 @@ def process_form_completion(user_id, chat_id):
 ✅ ফর্ম সম্পূর্ণ হয়েছে!
         """
         
-        # Send photo with caption to group
-        group_response = {
-            'method': 'sendPhoto',
+        # ACTUALLY SEND PHOTO TO GROUP
+        group_data = {
             'chat_id': GROUP_ID,
             'photo': photo_file_id,
             'caption': group_message,
             'parse_mode': 'HTML'
         }
         
+        # Send photo to group via Telegram API
+        group_result = send_to_telegram_api('sendPhoto', group_data)
+        
+        if not group_result:
+            # If group send fails, try sending as text message
+            text_data = {
+                'chat_id': GROUP_ID,
+                'text': f"📸 ফর্ম সাবমিশন\nনাম: {name}\nUser ID: {user_id}\nছবি আপলোড করা হয়েছে",
+                'parse_mode': 'HTML'
+            }
+            send_to_telegram_api('sendMessage', text_data)
+        
         # Prepare success message for user
-        success_text = f"""
+        if group_result:
+            success_text = f"""
 🎉 <b>ফর্ম সফলভাবে জমা হয়েছে!</b>
 
 ✅ <b>আপনার তথ্য:</b>
@@ -161,7 +198,19 @@ def process_form_completion(user_id, chat_id):
 📊 <b>আপনার তথ্য গ্রুপে শেয়ার করা হয়েছে</b>
 
 ধন্যবাদ! আপনার ফর্ম সাবমিশন সম্পূর্ণ হয়েছে।
-        """
+            """
+        else:
+            success_text = f"""
+⚠️ <b>ফর্ম জমা হয়েছে কিন্তু গ্রুপে পাঠানো যায়নি!</b>
+
+✅ <b>আপনার তথ্য:</b>
+┣ <b>নাম:</b> {name}
+┣ <b>ছবি:</b> ✅ আপলোডেড
+
+❌ <b>গ্রুপ:</b> {GROUP_ID} (পাঠানো যায়নি)
+
+দয়া করে আবার চেষ্টা করুন।
+            """
         
         # Clear session
         del SESSIONS[user_id]
