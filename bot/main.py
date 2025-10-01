@@ -2,115 +2,93 @@ from flask import Flask, request, jsonify
 import os
 import logging
 import importlib
-import pkgutil
 from datetime import datetime
-from bot.core.bot_manager import bot_manager
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def auto_discover_handlers():
-    """Automatically discover all handler modules with multi-command support"""
-    handlers = {}
-    
-    try:
-        handlers_package = importlib.import_module('bot.handlers')
-        
-        for importer, module_name, ispkg in pkgutil.iter_modules(handlers_package.__path__):
-            if module_name != '__init__':
-                try:
-                    module = importlib.import_module(f'bot.handlers.{module_name}')
-                    
-                    # Support for multiple commands in one file (name1|name2|name3.py)
-                    command_names = module_name.split('|')
-                    
-                    for command_name in command_names:
-                        function_name = f"handle_{command_name}"
-                        if hasattr(module, function_name):
-                            full_command_name = f"/{command_name}"
-                            handlers[full_command_name] = getattr(module, function_name)
-                            logger.info(f"✅ Auto-loaded command: {full_command_name}")
-                    
-                except Exception as e:
-                    logger.error(f"❌ Error loading handler {module_name}: {e}")
-    
-    except Exception as e:
-        logger.error(f"❌ Error discovering handlers: {e}")
-    
-    return handlers
-
-# Auto-discover all handlers on startup
-COMMAND_HANDLERS = auto_discover_handlers()
-logger.info(f"🎯 Total commands loaded: {len(COMMAND_HANDLERS)}")
-
-def process_inline_button_click(update: dict):
-    """Process inline keyboard button clicks"""
-    try:
-        callback_query = update.get('callback_query', {})
-        if not callback_query:
+# Import bot manager
+try:
+    from bot.core.bot_manager import bot_manager
+    logger.info("✅ Bot manager imported successfully")
+except ImportError as e:
+    logger.error(f"❌ Bot manager import failed: {e}")
+    # Fallback manager
+    class SimpleManager:
+        def __init__(self): 
+            self.user_sessions = {}
+            self.pending_responses = {}
+        def set_token(self, token): 
+            self.token = token
+            logger.info(f"✅ Token set: {token[:10]}...")
+        def send_message(self, chat_id, text, **kwargs): 
+            return {'method': 'sendMessage', 'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'}
+        def handle_next_command(self, chat_id, command, user_info=None):
+            self.pending_responses[chat_id] = {'expected_command': command, 'user_info': user_info}
+        def process_pending_response(self, chat_id, message_text, user_info):
+            if chat_id in self.pending_responses:
+                pending = self.pending_responses.pop(chat_id)
+                return f"✅ Processed pending response: {message_text}"
             return None
-        
-        chat_id = callback_query['message']['chat']['id']
-        message_id = callback_query['message']['message_id']
-        callback_data = callback_query['data']
-        user_info = callback_query['from']
-        
-        logger.info(f"Inline button clicked by {user_info.get('first_name')}: {callback_data}")
-        
-        # Answer callback query first
-        bot_manager.answer_callback_query(callback_query['id'], "Processing...")
-        
-        # Process callback data (you can implement your logic here)
-        response_text = f"🔘 Button clicked: {callback_data}\n\n👤 User: {user_info.get('first_name')}"
-        
-        # Edit the original message
-        result = bot_manager.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=response_text,
-            reply_markup=bot_manager.create_inline_keyboard([
-                [bot_manager.create_inline_button("🔄 Click Again", callback_data="click_again")],
-                [bot_manager.create_inline_button("❌ Close", callback_data="close_message")]
-            ])
-        )
-        
-        return result
-        
-    except Exception as e:
-        logger.error(f"Error processing inline button: {e}")
-        return None
+    bot_manager = SimpleManager()
+
+# Command handlers registry
+COMMAND_HANDLERS = {}
+
+def load_handlers():
+    """Load all command handlers"""
+    handler_files = {
+        'start': ['handle_start'],
+        'help': ['handle_help'],
+        'status': ['handle_status'],
+        'time': ['handle_time'],
+        'utils_tools': ['handle_utils', 'handle_tools', 'handle_demo_response']
+    }
+    
+    for file_name, functions in handler_files.items():
+        try:
+            module = importlib.import_module(f'bot.handlers.{file_name}')
+            for func_name in functions:
+                if hasattr(module, func_name):
+                    # Extract command name from function name
+                    cmd_name = func_name.replace('handle_', '')
+                    if cmd_name == 'demo_response':
+                        continue  # Skip internal handler
+                    COMMAND_HANDLERS[f'/{cmd_name}'] = getattr(module, func_name)
+                    logger.info(f"✅ Loaded command: /{cmd_name}")
+        except ImportError as e:
+            logger.warning(f"⚠️ Could not load {file_name}: {e}")
+
+# Load handlers at startup
+load_handlers()
+logger.info(f"🎯 Total commands loaded: {len(COMMAND_HANDLERS)}")
 
 @app.route('/', methods=['GET', 'POST'])
 def handle_request():
     try:
+        # Get token from URL parameter OR environment variable
         token = request.args.get('token') or os.environ.get('BOT_TOKEN')
         
         if not token:
             return jsonify({
-                'error': 'Token required',
-                'solution': 'Add ?token=YOUR_BOT_TOKEN to URL or set BOT_TOKEN environment variable'
+                'status': 'error',
+                'message': 'Token required',
+                'usage': 'Add ?token=YOUR_BOT_TOKEN to URL or set BOT_TOKEN environment variable',
+                'available_commands': list(COMMAND_HANDLERS.keys())
             }), 400
 
-        # Initialize bot manager with token
+        # Set token in bot manager
         bot_manager.set_token(token)
 
         if request.method == 'GET':
             return jsonify({
-                'status': 'Bot is running with ENHANCED AUTO-MODULAR architecture',
+                'status': 'success',
+                'message': 'Bot is running on Render with URL token support!',
                 'available_commands': list(COMMAND_HANDLERS.keys()),
                 'total_commands': len(COMMAND_HANDLERS),
-                'features': [
-                    'Auto command discovery',
-                    'Multi-command files',
-                    'HTML/Markdown formatting',
-                    'Media support',
-                    'Inline keyboards',
-                    'Reply keyboards',
-                    'HTTP requests',
-                    'User sessions',
-                    'Pending responses'
-                ],
+                'token_received': True,
+                'token_prefix': token[:10] + '...' if token else None,
                 'timestamp': datetime.now().isoformat()
             })
 
@@ -118,67 +96,67 @@ def handle_request():
             update = request.get_json()
             
             if not update:
-                return jsonify({'error': 'Invalid JSON data'}), 400
+                return jsonify({'status': 'error', 'message': 'Invalid JSON data'}), 400
             
-            # Handle inline button clicks
-            if 'callback_query' in update:
-                result = process_inline_button_click(update)
-                if result:
-                    return jsonify({'ok': True})
-            
+            # Handle message updates
             if 'message' in update:
-                chat_id = update['message']['chat']['id']
-                message_text = update['message'].get('text', '').strip()
-                user_info = update['message'].get('from', {})
+                message = update['message']
+                chat_id = message['chat']['id']
+                text = message.get('text', '').strip()
+                user_info = message.get('from', {})
                 
-                logger.info(f"Message from {user_info.get('first_name')}: {message_text}")
+                user_name = user_info.get('first_name', 'Unknown')
+                logger.info(f"📨 Message from {user_name}: {text}")
                 
-                # Check for pending responses first
-                pending_response = bot_manager.process_pending_response(chat_id, message_text, user_info)
+                # Check for pending responses
+                pending_response = bot_manager.process_pending_response(chat_id, text, user_info)
                 if pending_response:
                     return jsonify(bot_manager.send_message(chat_id, pending_response))
                 
-                # Find and execute command handler
+                # Process commands
                 for command, handler in COMMAND_HANDLERS.items():
-                    if message_text.startswith(command):
-                        response_text = handler(user_info, chat_id, message_text, bot_manager=bot_manager)
-                        return jsonify(bot_manager.send_message(chat_id, response_text))
+                    if text.startswith(command):
+                        try:
+                            response_text = handler(user_info, chat_id, text, bot_manager=bot_manager)
+                            return jsonify(bot_manager.send_message(chat_id, response_text))
+                        except Exception as e:
+                            logger.error(f"Command execution error: {e}")
+                            return jsonify(bot_manager.send_message(
+                                chat_id, 
+                                f"❌ Command error: {str(e)}"
+                            ))
                 
-                # Default response for unknown commands
-                available_commands = "\n".join([f"• <code>{cmd}</code>" for cmd in COMMAND_HANDLERS.keys()])
-                return jsonify(bot_manager.send_message(
-                    chat_id, 
-                    f"❌ <b>Unknown Command:</b> <code>{message_text}</code>\n\n"
-                    f"📋 <b>Available Commands:</b>\n{available_commands}\n\n"
-                    f"💡 <b>Help:</b> <code>/help</code>"
-                ))
+                # Unknown command response
+                if COMMAND_HANDLERS:
+                    available_cmds = "\n".join([f"• <code>{cmd}</code>" for cmd in COMMAND_HANDLERS.keys()])
+                    response_text = f"❌ <b>Unknown Command:</b> <code>{text}</code>\n\n📋 <b>Available Commands:</b>\n{available_cmds}"
+                else:
+                    response_text = "❌ <b>No commands loaded.</b> Check server logs."
+                
+                return jsonify(bot_manager.send_message(chat_id, response_text))
             
-            return jsonify({'ok': True})
+            return jsonify({'status': 'ok', 'message': 'No message to process'})
 
     except Exception as e:
-        logger.error(f'Error: {e}')
-        return jsonify({'error': 'Processing failed'}), 500
+        logger.error(f'🚨 Server error: {e}')
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
-@app.route('/health')
+@app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({
-        'status': 'healthy', 
+        'status': 'healthy',
         'total_commands': len(COMMAND_HANDLERS),
         'commands': list(COMMAND_HANDLERS.keys()),
-        'user_sessions': len(bot_manager.user_sessions),
-        'pending_responses': len(bot_manager.pending_responses),
         'timestamp': datetime.now().isoformat()
-    }), 200
-
-@app.route('/debug')
-def debug_info():
-    """Debug endpoint to see bot state"""
-    return jsonify({
-        'user_sessions': bot_manager.user_sessions,
-        'pending_responses': bot_manager.pending_responses,
-        'command_handlers': list(COMMAND_HANDLERS.keys())
     })
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Alternative webhook endpoint"""
+    return handle_request()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
+    logger.info(f"🚀 Server starting on port {port}")
+    logger.info(f"📊 Loaded {len(COMMAND_HANDLERS)} commands")
     app.run(host='0.0.0.0', port=port, debug=False)
