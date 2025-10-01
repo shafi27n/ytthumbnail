@@ -4,180 +4,181 @@ import logging
 import importlib
 import pkgutil
 from datetime import datetime
-import threading
-import subprocess
-import sys
-import time
+from bot.core.bot_manager import bot_manager
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Import token manager
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from token_manager import TokenManager
+def auto_discover_handlers():
+    """Automatically discover all handler modules with multi-command support"""
+    handlers = {}
+    
+    try:
+        handlers_package = importlib.import_module('bot.handlers')
+        
+        for importer, module_name, ispkg in pkgutil.iter_modules(handlers_package.__path__):
+            if module_name != '__init__':
+                try:
+                    module = importlib.import_module(f'bot.handlers.{module_name}')
+                    
+                    # Support for multiple commands in one file (name1|name2|name3.py)
+                    command_names = module_name.split('|')
+                    
+                    for command_name in command_names:
+                        function_name = f"handle_{command_name}"
+                        if hasattr(module, function_name):
+                            full_command_name = f"/{command_name}"
+                            handlers[full_command_name] = getattr(module, function_name)
+                            logger.info(f"✅ Auto-loaded command: {full_command_name}")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error loading handler {module_name}: {e}")
+    
+    except Exception as e:
+        logger.error(f"❌ Error discovering handlers: {e}")
+    
+    return handlers
 
-class HandlerManager:
-    def __init__(self):
-        self.token_manager = TokenManager()
-        self.handler_processes = {}
-        self.handler_files = {}
-    
-    def discover_handlers(self):
-        """Discover all handler files in handlers directory"""
-        handlers_dir = os.path.join(os.path.dirname(__file__), 'handlers')
-        handlers = {}
-        
-        try:
-            for filename in os.listdir(handlers_dir):
-                if filename.endswith('.py') and filename != '__init__.py':
-                    handler_name = filename[:-3]  # Remove .py extension
-                    handler_path = os.path.join(handlers_dir, filename)
-                    handlers[handler_name] = handler_path
-                    logger.info(f"📁 Discovered handler: {handler_name}")
-        
-        except Exception as e:
-            logger.error(f"❌ Error discovering handlers: {e}")
-        
-        return handlers
-    
-    def start_handler(self, handler_name, handler_path):
-        """Start a handler in a separate process with token injection"""
-        try:
-            # Read original content for later restoration
-            with open(handler_path, 'r', encoding='utf-8') as file:
-                original_content = file.read()
-            
-            # Inject token
-            self.token_manager.inject_token_into_file(handler_path)
-            
-            # Start the handler in a separate process
-            process = subprocess.Popen([
-                sys.executable, handler_path
-            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            
-            self.handler_processes[handler_name] = process
-            self.handler_files[handler_name] = {
-                'path': handler_path,
-                'original_content': original_content
-            }
-            
-            logger.info(f"🚀 Started handler: {handler_name} (PID: {process.pid})")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to start handler {handler_name}: {e}")
-            return False
-    
-    def start_all_handlers(self):
-        """Start all discovered handlers"""
-        handlers = self.discover_handlers()
-        
-        if not handlers:
-            logger.warning("⚠️ No handlers found")
-            return
-        
-        for handler_name, handler_path in handlers.items():
-            self.start_handler(handler_name, handler_path)
-        
-        logger.info(f"🎯 Total handlers started: {len(handlers)}")
-    
-    def stop_all_handlers(self):
-        """Stop all running handlers and restore original files"""
-        for handler_name, process in self.handler_processes.items():
-            try:
-                process.terminate()
-                process.wait(timeout=5)
-                logger.info(f"🛑 Stopped handler: {handler_name}")
-            except Exception as e:
-                logger.error(f"❌ Error stopping {handler_name}: {e}")
-        
-        # Restore original files
-        for handler_name, file_info in self.handler_files.items():
-            self.token_manager.restore_original_file(
-                file_info['path'], 
-                file_info['original_content']
-            )
-        
-        self.handler_processes.clear()
-        self.handler_files.clear()
+# Auto-discover all handlers on startup
+COMMAND_HANDLERS = auto_discover_handlers()
+logger.info(f"🎯 Total commands loaded: {len(COMMAND_HANDLERS)}")
 
-# Global handler manager
-handler_manager = HandlerManager()
+def process_inline_button_click(update: dict):
+    """Process inline keyboard button clicks"""
+    try:
+        callback_query = update.get('callback_query', {})
+        if not callback_query:
+            return None
+        
+        chat_id = callback_query['message']['chat']['id']
+        message_id = callback_query['message']['message_id']
+        callback_data = callback_query['data']
+        user_info = callback_query['from']
+        
+        logger.info(f"Inline button clicked by {user_info.get('first_name')}: {callback_data}")
+        
+        # Answer callback query first
+        bot_manager.answer_callback_query(callback_query['id'], "Processing...")
+        
+        # Process callback data (you can implement your logic here)
+        response_text = f"🔘 Button clicked: {callback_data}\n\n👤 User: {user_info.get('first_name')}"
+        
+        # Edit the original message
+        result = bot_manager.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=response_text,
+            reply_markup=bot_manager.create_inline_keyboard([
+                [bot_manager.create_inline_button("🔄 Click Again", callback_data="click_again")],
+                [bot_manager.create_inline_button("❌ Close", callback_data="close_message")]
+            ])
+        )
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error processing inline button: {e}")
+        return None
 
 @app.route('/', methods=['GET', 'POST'])
-def handle_webhook():
-    """Main webhook endpoint"""
+def handle_request():
     try:
+        token = request.args.get('token') or os.environ.get('BOT_TOKEN')
+        
+        if not token:
+            return jsonify({
+                'error': 'Token required',
+                'solution': 'Add ?token=YOUR_BOT_TOKEN to URL or set BOT_TOKEN environment variable'
+            }), 400
+
+        # Initialize bot manager with token
+        bot_manager.set_token(token)
+
         if request.method == 'GET':
             return jsonify({
-                'status': 'Bot is running with DYNAMIC TOKEN INJECTION system',
-                'active_handlers': list(handler_manager.handler_processes.keys()),
-                'total_handlers': len(handler_manager.handler_processes),
+                'status': 'Bot is running with ENHANCED AUTO-MODULAR architecture',
+                'available_commands': list(COMMAND_HANDLERS.keys()),
+                'total_commands': len(COMMAND_HANDLERS),
+                'features': [
+                    'Auto command discovery',
+                    'Multi-command files',
+                    'HTML/Markdown formatting',
+                    'Media support',
+                    'Inline keyboards',
+                    'Reply keyboards',
+                    'HTTP requests',
+                    'User sessions',
+                    'Pending responses'
+                ],
                 'timestamp': datetime.now().isoformat()
             })
 
         if request.method == 'POST':
-            # For webhook messages, just acknowledge
+            update = request.get_json()
+            
+            if not update:
+                return jsonify({'error': 'Invalid JSON data'}), 400
+            
+            # Handle inline button clicks
+            if 'callback_query' in update:
+                result = process_inline_button_click(update)
+                if result:
+                    return jsonify({'ok': True})
+            
+            if 'message' in update:
+                chat_id = update['message']['chat']['id']
+                message_text = update['message'].get('text', '').strip()
+                user_info = update['message'].get('from', {})
+                
+                logger.info(f"Message from {user_info.get('first_name')}: {message_text}")
+                
+                # Check for pending responses first
+                pending_response = bot_manager.process_pending_response(chat_id, message_text, user_info)
+                if pending_response:
+                    return jsonify(bot_manager.send_message(chat_id, pending_response))
+                
+                # Find and execute command handler
+                for command, handler in COMMAND_HANDLERS.items():
+                    if message_text.startswith(command):
+                        response_text = handler(user_info, chat_id, message_text, bot_manager=bot_manager)
+                        return jsonify(bot_manager.send_message(chat_id, response_text))
+                
+                # Default response for unknown commands
+                available_commands = "\n".join([f"• <code>{cmd}</code>" for cmd in COMMAND_HANDLERS.keys()])
+                return jsonify(bot_manager.send_message(
+                    chat_id, 
+                    f"❌ <b>Unknown Command:</b> <code>{message_text}</code>\n\n"
+                    f"📋 <b>Available Commands:</b>\n{available_commands}\n\n"
+                    f"💡 <b>Help:</b> <code>/help</code>"
+                ))
+            
             return jsonify({'ok': True})
 
     except Exception as e:
-        logger.error(f'Webhook error: {e}')
+        logger.error(f'Error: {e}')
         return jsonify({'error': 'Processing failed'}), 500
 
 @app.route('/health')
 def health_check():
-    """Health check endpoint"""
-    handler_status = {}
-    for handler_name, process in handler_manager.handler_processes.items():
-        handler_status[handler_name] = {
-            'pid': process.pid,
-            'alive': process.poll() is None
-        }
-    
     return jsonify({
-        'status': 'healthy',
-        'active_handlers': len(handler_manager.handler_processes),
-        'handler_status': handler_status,
+        'status': 'healthy', 
+        'total_commands': len(COMMAND_HANDLERS),
+        'commands': list(COMMAND_HANDLERS.keys()),
+        'user_sessions': len(bot_manager.user_sessions),
+        'pending_responses': len(bot_manager.pending_responses),
         'timestamp': datetime.now().isoformat()
     }), 200
 
-@app.route('/restart/<handler_name>')
-def restart_handler(handler_name):
-    """Restart a specific handler"""
-    if handler_name in handler_manager.handler_processes:
-        # Stop current process
-        handler_manager.handler_processes[handler_name].terminate()
-        
-        # Restart
-        handler_path = handler_manager.handler_files[handler_name]['path']
-        handler_manager.start_handler(handler_name, handler_path)
-        
-        return jsonify({'status': f'Handler {handler_name} restarted'})
-    else:
-        return jsonify({'error': 'Handler not found'}), 404
-
-def signal_handler(signum, frame):
-    """Handle shutdown signals"""
-    logger.info("🛑 Shutdown signal received")
-    handler_manager.stop_all_handlers()
-    sys.exit(0)
+@app.route('/debug')
+def debug_info():
+    """Debug endpoint to see bot state"""
+    return jsonify({
+        'user_sessions': bot_manager.user_sessions,
+        'pending_responses': bot_manager.pending_responses,
+        'command_handlers': list(COMMAND_HANDLERS.keys())
+    })
 
 if __name__ == '__main__':
-    import signal
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
-    # Start all handlers
-    logger.info("🤖 Starting all handlers...")
-    handler_manager.start_all_handlers()
-    
-    # Start Flask app
     port = int(os.environ.get('PORT', 10000))
-    logger.info(f"🌐 Web server starting on port {port}")
-    
-    try:
-        app.run(host='0.0.0.0', port=port, debug=False)
-    finally:
-        # Cleanup on exit
-        handler_manager.stop_all_handlers()
+    app.run(host='0.0.0.0', port=port, debug=False)
