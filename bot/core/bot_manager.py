@@ -13,8 +13,8 @@ class BotManager:
         self.db = Database.get_instance()
         self.waiting_commands: Dict[int, str] = {}  # user_id -> command
         self.command_handlers: Dict[str, Callable] = {}
-        self.bot_token = os.environ.get('BOT_TOKEN', '')
-        self.base_url = f"https://api.telegram.org/bot{self.bot_token}"
+        self.bot_token = os.environ.get('BOT_TOKEN', '')  # Optional from env
+        self.base_url = f"https://api.telegram.org/bot{self.bot_token}" if self.bot_token else ""
         
     def auto_discover_handlers(self):
         """Automatically discover all handler modules"""
@@ -46,6 +46,12 @@ class BotManager:
         
         self.command_handlers = handlers
         return handlers
+    
+    def set_token(self, token: str):
+        """Set bot token dynamically"""
+        self.bot_token = token
+        self.base_url = f"https://api.telegram.org/bot{token}"
+        logger.info("✅ Bot token set dynamically")
     
     def run_command(self, command_name: str, user_info: Dict, chat_id: int, message_text: str) -> str:
         """Execute a specific command"""
@@ -80,6 +86,10 @@ class BotManager:
                    reply_markup: Optional[Dict] = None) -> bool:
         """Send message to Telegram"""
         try:
+            if not self.bot_token:
+                logger.error("❌ Bot token not set")
+                return False
+            
             url = f"{self.base_url}/sendMessage"
             payload = {
                 'chat_id': chat_id,
@@ -96,10 +106,15 @@ class BotManager:
             logger.error(f"❌ Error sending message: {e}")
             return False
     
+    # ... (other methods remain the same as previous version)
     def edit_message(self, chat_id: int, message_id: int, text: str, 
                     parse_mode: str = 'HTML', reply_markup: Optional[Dict] = None) -> bool:
         """Edit existing message"""
         try:
+            if not self.bot_token:
+                logger.error("❌ Bot token not set")
+                return False
+            
             url = f"{self.base_url}/editMessageText"
             payload = {
                 'chat_id': chat_id,
@@ -120,6 +135,10 @@ class BotManager:
     def delete_message(self, chat_id: int, message_id: int) -> bool:
         """Delete message"""
         try:
+            if not self.bot_token:
+                logger.error("❌ Bot token not set")
+                return False
+            
             url = f"{self.base_url}/deleteMessage"
             payload = {
                 'chat_id': chat_id,
@@ -136,6 +155,10 @@ class BotManager:
                   parse_mode: str = 'HTML') -> bool:
         """Send photo"""
         try:
+            if not self.bot_token:
+                logger.error("❌ Bot token not set")
+                return False
+            
             url = f"{self.base_url}/sendPhoto"
             payload = {
                 'chat_id': chat_id,
@@ -154,6 +177,10 @@ class BotManager:
                   parse_mode: str = 'HTML') -> bool:
         """Send video"""
         try:
+            if not self.bot_token:
+                logger.error("❌ Bot token not set")
+                return False
+            
             url = f"{self.base_url}/sendVideo"
             payload = {
                 'chat_id': chat_id,
