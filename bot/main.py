@@ -64,12 +64,6 @@ def auto_discover_handlers():
                             special_handlers[handler_type].append(handler_func)
                             logger.info(f"✅ Auto-loaded special handler: {module_name}.{func_name}")
                     
-                    # Import SESSIONS if module has its own
-                    if hasattr(module, 'SESSIONS'):
-                        module_sessions = getattr(module, 'SESSIONS')
-                        SESSIONS.update(module_sessions)
-                        logger.info(f"✅ Loaded sessions from {module_name}")
-                    
                 except Exception as e:
                     logger.error(f"❌ Error loading handler {module_name}: {e}")
     
@@ -109,17 +103,13 @@ def execute_telegram_method(method_data):
         url = f"https://api.telegram.org/bot{bot_token}/{method_data['method']}"
         headers = {'Content-Type': 'application/json'}
         
-        # Remove method from data as it's in URL
-        data = method_data.copy()
-        method_name = data.pop('method')
-        
-        response = requests.post(url, json=data, headers=headers, timeout=10)
+        response = requests.post(url, json=method_data, headers=headers, timeout=10)
         
         if response.status_code == 200:
-            logger.info(f"✅ Telegram API {method_name} successful")
+            logger.info(f"✅ Telegram API {method_data['method']} successful")
             return response.json()
         else:
-            logger.error(f"❌ Telegram API {method_name} error: {response.status_code} - {response.text}")
+            logger.error(f"❌ Telegram API {method_data['method']} error: {response.status_code} - {response.text}")
             return None
             
     except Exception as e:
@@ -156,7 +146,7 @@ def handle_request():
             if not update:
                 return jsonify({'error': 'Invalid JSON data'}), 400
             
-            logger.info(f"📨 Received update: {update.keys()}")
+            logger.info(f"📨 Received update: {list(update.keys())}")
             
             # Handle callback queries
             if 'callback_query' in update:
@@ -201,20 +191,29 @@ def handle_callback_query(callback_query):
         
         # Try all callback handlers from all modules
         callback_handled = False
+        response_to_send = None
+        
         for callback_handler in SPECIAL_HANDLERS.get('callbacks', []):
             try:
                 result = callback_handler(callback_data, user_info, chat_id, message_id)
                 if result:
                     callback_handled = True
-                    # If handler returns JSON response, execute it
-                    if isinstance(result, dict):
-                        execute_telegram_method(result)
-                    elif hasattr(result, 'json'):
-                        execute_telegram_method(result.get_json())
+                    response_to_send = result
                     break
             except Exception as e:
                 logger.error(f"❌ Error in callback handler: {e}")
                 continue
+        
+        if callback_handled and response_to_send:
+            # If handler returns JSON response, execute it
+            if isinstance(response_to_send, dict):
+                execute_telegram_method(response_to_send)
+                return jsonify({'ok': True})
+            elif hasattr(response_to_send, 'json'):
+                result_json = response_to_send.get_json()
+                if isinstance(result_json, dict):
+                    execute_telegram_method(result_json)
+                return jsonify({'ok': True})
         
         if not callback_handled:
             logger.warning(f"⚠️ No handler found for callback: {callback_data}")
@@ -268,7 +267,9 @@ def handle_message(message):
                         execute_telegram_method(result)
                     elif hasattr(result, 'json'):
                         # Flask jsonify response
-                        execute_telegram_method(result.get_json())
+                        result_json = result.get_json()
+                        if isinstance(result_json, dict):
+                            execute_telegram_method(result_json)
                     
                     return jsonify({'ok': True})
             
@@ -282,7 +283,9 @@ def handle_message(message):
                         if isinstance(result, dict):
                             execute_telegram_method(result)
                         elif hasattr(result, 'json'):
-                            execute_telegram_method(result.get_json())
+                            result_json = result.get_json()
+                            if isinstance(result_json, dict):
+                                execute_telegram_method(result_json)
                         break
                 except Exception as e:
                     logger.error(f"❌ Error in text handler: {e}")
@@ -292,7 +295,7 @@ def handle_message(message):
                 return jsonify({'ok': True})
             
             # Default response for non-command messages
-            if not text_handled:
+            if not text_handled and message_text:
                 available_commands = "\n".join([f"• <b>{cmd}</b>" for cmd in COMMAND_HANDLERS.keys()])
                 execute_telegram_method(send_telegram_message(
                     chat_id, 
@@ -311,10 +314,10 @@ def handle_message(message):
             'voice': SPECIAL_HANDLERS.get('voice', [])
         }
         
+        media_handled = False
         for media_type, handlers in media_handlers.items():
             if media_type in message and handlers:
                 logger.info(f"🖼️ Handling {media_type} message")
-                media_handled = False
                 for media_handler in handlers:
                     try:
                         result = media_handler(message)
@@ -323,17 +326,22 @@ def handle_message(message):
                             if isinstance(result, dict):
                                 execute_telegram_method(result)
                             elif hasattr(result, 'json'):
-                                execute_telegram_method(result.get_json())
+                                result_json = result.get_json()
+                                if isinstance(result_json, dict):
+                                    execute_telegram_method(result_json)
                             break
                     except Exception as e:
                         logger.error(f"❌ Error in {media_type} handler: {e}")
                         continue
                 
                 if media_handled:
-                    return jsonify({'ok': True})
+                    break
         
-        # Unknown message type
-        if 'text' not in message and not any(media_type in message for media_type in media_handlers.keys()):
+        if media_handled:
+            return jsonify({'ok': True})
+        
+        # Unknown message type (only if no text and no media handled)
+        if 'text' not in message and not media_handled:
             execute_telegram_method(send_telegram_message(
                 chat_id,
                 "❌ <b>Unsupported Message Type</b>\n\n"
@@ -369,8 +377,7 @@ def health_check():
         'commands': list(COMMAND_HANDLERS.keys()),
         'special_handlers': {k: len(v) for k, v in SPECIAL_HANDLERS.items()},
         'active_sessions': len(SESSIONS),
-        'timestamp': datetime.now().isoformat(),
-        'uptime': time.time() - app_start_time
+        'timestamp': datetime.now().isoformat()
     }), 200
 
 @app.route('/debug/handlers', methods=['GET'])
@@ -393,7 +400,7 @@ def debug_handlers():
     return jsonify({
         'command_handlers': handler_details,
         'special_handlers': special_details,
-        'sessions': SESSIONS,
+        'sessions_count': len(SESSIONS),
         'total_loaded': len(COMMAND_HANDLERS),
         'status': 'working'
     })
@@ -403,7 +410,7 @@ def list_sessions():
     """List all active sessions"""
     return jsonify({
         'active_sessions': len(SESSIONS),
-        'sessions': SESSIONS,
+        'sessions_count': len(SESSIONS),
         'timestamp': datetime.now().isoformat()
     })
 
@@ -417,9 +424,6 @@ def clear_sessions():
         'message': f'Cleared {session_count} sessions',
         'sessions_remaining': 0
     })
-
-# Store app start time
-app_start_time = time.time()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
