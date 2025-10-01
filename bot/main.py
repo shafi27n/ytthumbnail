@@ -1,10 +1,8 @@
 from flask import Flask, request, jsonify
 import requests
 import logging
-import importlib
-import pkgutil
-import time
 import os
+import importlib
 from datetime import datetime
 
 app = Flask(__name__)
@@ -40,7 +38,7 @@ class Bot:
         user_id = user_info.get('id')
         next_command_handlers[user_id] = {
             'command': command_name,
-            'timestamp': time.time(),
+            'timestamp': datetime.now().isoformat(),
             'user_info': user_info,
             'chat_id': chat_id
         }
@@ -120,30 +118,36 @@ class User:
             return None
 
 def auto_discover_handlers():
-    """Automatically discover all handler modules"""
+    """Automatically discover all handler modules with multiple command support"""
     handlers = {}
     
     try:
-        handlers_package = importlib.import_module('bot.handlers')
+        handlers_dir = 'bot/handlers'
         
-        for importer, module_name, ispkg in pkgutil.iter_modules(handlers_package.__path__):
-            if module_name != '__init__':
-                try:
-                    module = importlib.import_module(f'bot.handlers.{module_name}')
+        if os.path.exists(handlers_dir):
+            for filename in os.listdir(handlers_dir):
+                if filename.endswith('.py') and filename != '__init__.py':
+                    module_name = filename[:-3]  # Remove .py
                     
-                    # Handle multiple commands from filename (name1|name2|name3.py)
-                    command_names = module_name.split('|')
-                    
-                    for command_name in command_names:
-                        function_name = f"handle_{command_name}"
-                        if hasattr(module, function_name):
-                            handlers[f"/{command_name}"] = getattr(module, function_name)
-                            logger.info(f"✅ Auto-loaded command: /{command_name}")
-                        else:
-                            logger.warning(f"⚠️ Function {function_name} not found in {module_name}")
-                    
-                except Exception as e:
-                    logger.error(f"❌ Error loading handler {module_name}: {e}")
+                    try:
+                        # Import the module
+                        module = importlib.import_module(f'bot.handlers.{module_name}')
+                        
+                        # Handle multiple commands from filename (name1,name2,name3.py)
+                        command_names = module_name.split(',')
+                        
+                        for command_name in command_names:
+                            function_name = f"handle_{command_name}"
+                            if hasattr(module, function_name):
+                                handlers[f"/{command_name}"] = getattr(module, function_name)
+                                logger.info(f"✅ Auto-loaded command: /{command_name}")
+                            else:
+                                logger.warning(f"⚠️ Function {function_name} not found in {module_name}")
+                        
+                    except Exception as e:
+                        logger.error(f"❌ Error loading handler {module_name}: {e}")
+        else:
+            logger.error(f"❌ Handlers directory not found: {handlers_dir}")
     
     except Exception as e:
         logger.error(f"❌ Error discovering handlers: {e}")
@@ -178,13 +182,14 @@ def create_inline_keyboard(buttons):
         'inline_keyboard': buttons
     }
 
-# Initialize command handlers
+# Initialize command handlers on startup
 command_handlers = auto_discover_handlers()
 logger.info(f"🎯 Total commands loaded: {len(command_handlers)}")
 
 @app.route('/', methods=['GET', 'POST'])
 def handle_request():
     try:
+        # Get token from URL parameter or environment variable
         token = request.args.get('token') or os.environ.get('BOT_TOKEN')
         
         if not token:
@@ -195,7 +200,7 @@ def handle_request():
 
         if request.method == 'GET':
             return jsonify({
-                'status': 'Bot is running with ADVANCED AUTO-MODULAR architecture',
+                'status': '✅ Bot is running with AUTO-COMMAND LOADING',
                 'available_commands': list(command_handlers.keys()),
                 'total_commands': len(command_handlers),
                 'active_sessions': len(next_command_handlers),
@@ -214,7 +219,7 @@ def handle_request():
                 user_info = update['message'].get('from', {})
                 user_id = user_info.get('id')
                 
-                logger.info(f"Message from {user_info.get('first_name')}: {message_text}")
+                logger.info(f"📩 Message from {user_info.get('first_name')}: {message_text}")
                 
                 # Check for next command handler first
                 if user_id in next_command_handlers:
@@ -267,7 +272,7 @@ def handle_request():
             return jsonify({'ok': True})
 
     except Exception as e:
-        logger.error(f'Error: {e}')
+        logger.error(f'❌ Error: {e}')
         return jsonify({'error': 'Processing failed'}), 500
 
 @app.route('/health')
@@ -282,4 +287,5 @@ def health_check():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
+    logger.info(f"🚀 Starting bot on port {port} with {len(command_handlers)} commands")
     app.run(host='0.0.0.0', port=port, debug=False)
