@@ -4,434 +4,180 @@ import logging
 import importlib
 import pkgutil
 from datetime import datetime
-import requests
+import threading
+import subprocess
+import sys
 import time
 
 app = Flask(__name__)
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Global session storage for all modules
-SESSIONS = {}
+# Import token manager
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from token_manager import TokenManager
 
-def auto_discover_handlers():
-    """Automatically discover all handler modules without any configuration"""
-    handlers = {}
-    special_handlers = {
-        'text': [],
-        'photo': [],
-        'document': [],
-        'video': [],
-        'audio': [],
-        'voice': [],
-        'callbacks': []
-    }
+class HandlerManager:
+    def __init__(self):
+        self.token_manager = TokenManager()
+        self.handler_processes = {}
+        self.handler_files = {}
     
-    try:
-        handlers_package = importlib.import_module('bot.handlers')
+    def discover_handlers(self):
+        """Discover all handler files in handlers directory"""
+        handlers_dir = os.path.join(os.path.dirname(__file__), 'handlers')
+        handlers = {}
         
-        for importer, module_name, ispkg in pkgutil.iter_modules(handlers_package.__path__):
-            if module_name != '__init__':
-                try:
-                    module = importlib.import_module(f'bot.handlers.{module_name}')
-                    
-                    # Regular command handlers
-                    function_name = f"handle_{module_name}"
-                    if hasattr(module, function_name):
-                        command_name = f"/{module_name}"
-                        handlers[command_name] = getattr(module, function_name)
-                        logger.info(f"✅ Auto-loaded command: {command_name}")
-                    
-                    # Special handlers - collect all from all modules
-                    special_functions = {
-                        'handle_text': 'text',
-                        'handle_photo': 'photo',
-                        'handle_document': 'document', 
-                        'handle_video': 'video',
-                        'handle_audio': 'audio',
-                        'handle_voice': 'voice',
-                        'handle_all_callbacks': 'callbacks'
-                    }
-                    
-                    for func_name, handler_type in special_functions.items():
-                        if hasattr(module, func_name):
-                            handler_func = getattr(module, func_name)
-                            special_handlers[handler_type].append(handler_func)
-                            logger.info(f"✅ Auto-loaded special handler: {module_name}.{func_name}")
-                    
-                except Exception as e:
-                    logger.error(f"❌ Error loading handler {module_name}: {e}")
-    
-    except Exception as e:
-        logger.error(f"❌ Error discovering handlers: {e}")
-    
-    return handlers, special_handlers
-
-# Auto-discover all handlers on startup
-COMMAND_HANDLERS, SPECIAL_HANDLERS = auto_discover_handlers()
-logger.info(f"🎯 Total commands loaded: {len(COMMAND_HANDLERS)}")
-logger.info(f"🎯 Commands: {list(COMMAND_HANDLERS.keys())}")
-logger.info(f"🔧 Special handlers: {[f'{k}: {len(v)}' for k, v in SPECIAL_HANDLERS.items()]}")
-
-def send_telegram_message(chat_id, text, parse_mode='HTML', reply_markup=None):
-    """Send message with HTML parse mode"""
-    message_data = {
-        'method': 'sendMessage',
-        'chat_id': chat_id,
-        'text': text,
-        'parse_mode': parse_mode
-    }
-    
-    if reply_markup:
-        message_data['reply_markup'] = reply_markup
+        try:
+            for filename in os.listdir(handlers_dir):
+                if filename.endswith('.py') and filename != '__init__.py':
+                    handler_name = filename[:-3]  # Remove .py extension
+                    handler_path = os.path.join(handlers_dir, filename)
+                    handlers[handler_name] = handler_path
+                    logger.info(f"📁 Discovered handler: {handler_name}")
         
-    return message_data
-
-def execute_telegram_method(method_data):
-    """Execute Telegram API method"""
-    try:
-        bot_token = os.environ.get('BOT_TOKEN')
-        if not bot_token:
-            logger.error("❌ BOT_TOKEN not found in environment variables")
-            return None
+        except Exception as e:
+            logger.error(f"❌ Error discovering handlers: {e}")
+        
+        return handlers
+    
+    def start_handler(self, handler_name, handler_path):
+        """Start a handler in a separate process with token injection"""
+        try:
+            # Read original content for later restoration
+            with open(handler_path, 'r', encoding='utf-8') as file:
+                original_content = file.read()
             
-        url = f"https://api.telegram.org/bot{bot_token}/{method_data['method']}"
-        headers = {'Content-Type': 'application/json'}
-        
-        response = requests.post(url, json=method_data, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            logger.info(f"✅ Telegram API {method_data['method']} successful")
-            return response.json()
-        else:
-            logger.error(f"❌ Telegram API {method_data['method']} error: {response.status_code} - {response.text}")
-            return None
+            # Inject token
+            self.token_manager.inject_token_into_file(handler_path)
             
-    except Exception as e:
-        logger.error(f"❌ Error executing Telegram method: {e}")
-        return None
+            # Start the handler in a separate process
+            process = subprocess.Popen([
+                sys.executable, handler_path
+            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+            self.handler_processes[handler_name] = process
+            self.handler_files[handler_name] = {
+                'path': handler_path,
+                'original_content': original_content
+            }
+            
+            logger.info(f"🚀 Started handler: {handler_name} (PID: {process.pid})")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to start handler {handler_name}: {e}")
+            return False
+    
+    def start_all_handlers(self):
+        """Start all discovered handlers"""
+        handlers = self.discover_handlers()
+        
+        if not handlers:
+            logger.warning("⚠️ No handlers found")
+            return
+        
+        for handler_name, handler_path in handlers.items():
+            self.start_handler(handler_name, handler_path)
+        
+        logger.info(f"🎯 Total handlers started: {len(handlers)}")
+    
+    def stop_all_handlers(self):
+        """Stop all running handlers and restore original files"""
+        for handler_name, process in self.handler_processes.items():
+            try:
+                process.terminate()
+                process.wait(timeout=5)
+                logger.info(f"🛑 Stopped handler: {handler_name}")
+            except Exception as e:
+                logger.error(f"❌ Error stopping {handler_name}: {e}")
+        
+        # Restore original files
+        for handler_name, file_info in self.handler_files.items():
+            self.token_manager.restore_original_file(
+                file_info['path'], 
+                file_info['original_content']
+            )
+        
+        self.handler_processes.clear()
+        self.handler_files.clear()
+
+# Global handler manager
+handler_manager = HandlerManager()
 
 @app.route('/', methods=['GET', 'POST'])
-def handle_request():
-    """Main webhook handler"""
+def handle_webhook():
+    """Main webhook endpoint"""
     try:
-        token = request.args.get('token') or os.environ.get('BOT_TOKEN')
-        
-        if not token:
-            return jsonify({
-                'error': 'Token required',
-                'solution': 'Add ?token=YOUR_BOT_TOKEN to URL or set BOT_TOKEN environment variable',
-                'available_commands': list(COMMAND_HANDLERS.keys()),
-                'timestamp': datetime.now().isoformat()
-            }), 400
-
         if request.method == 'GET':
             return jsonify({
-                'status': 'Bot is running with AUTO-MODULAR architecture',
-                'available_commands': list(COMMAND_HANDLERS.keys()),
-                'total_commands': len(COMMAND_HANDLERS),
-                'special_handlers': {k: len(v) for k, v in SPECIAL_HANDLERS.items()},
-                'active_sessions': len(SESSIONS),
+                'status': 'Bot is running with DYNAMIC TOKEN INJECTION system',
+                'active_handlers': list(handler_manager.handler_processes.keys()),
+                'total_handlers': len(handler_manager.handler_processes),
                 'timestamp': datetime.now().isoformat()
             })
 
         if request.method == 'POST':
-            update = request.get_json()
-            
-            if not update:
-                return jsonify({'error': 'Invalid JSON data'}), 400
-            
-            logger.info(f"📨 Received update: {list(update.keys())}")
-            
-            # Handle callback queries
-            if 'callback_query' in update:
-                result = handle_callback_query(update['callback_query'])
-                if result:
-                    return result
-            
-            # Handle messages
-            if 'message' in update:
-                result = handle_message(update['message'])
-                if result:
-                    return result
-            
-            return jsonify({'ok': True, 'handled': True})
+            # For webhook messages, just acknowledge
+            return jsonify({'ok': True})
 
     except Exception as e:
-        logger.error(f'❌ Error handling request: {e}')
+        logger.error(f'Webhook error: {e}')
         return jsonify({'error': 'Processing failed'}), 500
 
-def handle_callback_query(callback_query):
-    """Handle callback queries from inline keyboards"""
-    try:
-        callback_data = callback_query.get('data')
-        user_info = callback_query.get('from', {})
-        message = callback_query.get('message', {})
-        chat_id = message.get('chat', {}).get('id')
-        message_id = message.get('message_id')
-        callback_query_id = callback_query.get('id')
-        
-        logger.info(f"🔄 Callback received: {callback_data} from user {user_info.get('id')}")
-        
-        if not all([callback_data, chat_id, message_id, callback_query_id]):
-            return jsonify({'ok': True})
-        
-        # First, answer the callback query to remove loading state
-        answer_data = {
-            'method': 'answerCallbackQuery',
-            'callback_query_id': callback_query_id,
-            'text': 'Processing...'
-        }
-        execute_telegram_method(answer_data)
-        
-        # Try all callback handlers from all modules
-        callback_handled = False
-        response_to_send = None
-        
-        for callback_handler in SPECIAL_HANDLERS.get('callbacks', []):
-            try:
-                result = callback_handler(callback_data, user_info, chat_id, message_id)
-                if result:
-                    callback_handled = True
-                    response_to_send = result
-                    break
-            except Exception as e:
-                logger.error(f"❌ Error in callback handler: {e}")
-                continue
-        
-        if callback_handled and response_to_send:
-            # If handler returns JSON response, execute it
-            if isinstance(response_to_send, dict):
-                execute_telegram_method(response_to_send)
-                return jsonify({'ok': True})
-            elif hasattr(response_to_send, 'json'):
-                result_json = response_to_send.get_json()
-                if isinstance(result_json, dict):
-                    execute_telegram_method(result_json)
-                return jsonify({'ok': True})
-        
-        if not callback_handled:
-            logger.warning(f"⚠️ No handler found for callback: {callback_data}")
-            # Send default response for unhandled callbacks
-            execute_telegram_method(send_telegram_message(
-                chat_id, 
-                f"❌ <b>Action not implemented</b>\n\nCallback: <code>{callback_data}</code>",
-                parse_mode='HTML'
-            ))
-        
-        return jsonify({'ok': True})
-        
-    except Exception as e:
-        logger.error(f'❌ Error handling callback: {e}')
-        return jsonify({'ok': True})
-
-def handle_message(message):
-    """Handle all types of messages"""
-    try:
-        chat_id = message.get('chat', {}).get('id')
-        user_info = message.get('from', {})
-        message_text = message.get('text', '').strip()
-        user_id = user_info.get('id')
-        
-        if not chat_id:
-            return jsonify({'ok': True})
-        
-        logger.info(f"📨 Message from {user_info.get('first_name')} ({user_id}): {message_text}")
-        
-        # Check if user has active session
-        if user_id in SESSIONS:
-            session_data = SESSIONS[user_id]
-            logger.info(f"🎯 Active session found: {session_data}")
-        
-        # Handle text messages and commands
-        if 'text' in message:
-            # First check if it's a command
-            for command, handler in COMMAND_HANDLERS.items():
-                if message_text.startswith(command):
-                    logger.info(f"✅ Command matched: {command}")
-                    
-                    # Execute command handler
-                    result = handler(user_info, chat_id, message_text)
-                    
-                    # Handle different return types
-                    if isinstance(result, str):
-                        # String response - send as message
-                        execute_telegram_method(send_telegram_message(chat_id, result, parse_mode='HTML'))
-                    elif isinstance(result, dict):
-                        # Dict response - execute as Telegram method
-                        execute_telegram_method(result)
-                    elif hasattr(result, 'json'):
-                        # Flask jsonify response
-                        result_json = result.get_json()
-                        if isinstance(result_json, dict):
-                            execute_telegram_method(result_json)
-                    
-                    return jsonify({'ok': True})
-            
-            # Check for text handlers (for sessions and other processing)
-            text_handled = False
-            for text_handler in SPECIAL_HANDLERS.get('text', []):
-                try:
-                    result = text_handler(message)
-                    if result:
-                        text_handled = True
-                        if isinstance(result, dict):
-                            execute_telegram_method(result)
-                        elif hasattr(result, 'json'):
-                            result_json = result.get_json()
-                            if isinstance(result_json, dict):
-                                execute_telegram_method(result_json)
-                        break
-                except Exception as e:
-                    logger.error(f"❌ Error in text handler: {e}")
-                    continue
-            
-            if text_handled:
-                return jsonify({'ok': True})
-            
-            # Default response for non-command messages
-            if not text_handled and message_text:
-                available_commands = "\n".join([f"• <b>{cmd}</b>" for cmd in COMMAND_HANDLERS.keys()])
-                execute_telegram_method(send_telegram_message(
-                    chat_id, 
-                    f"👋 <b>Hello {user_info.get('first_name', 'Friend')}!</b>\n\n"
-                    f"📋 <b>Available Commands:</b>\n{available_commands}\n\n"
-                    f"💡 <b>Try:</b> <b>/menu</b> for interactive options",
-                    parse_mode='HTML'
-                ))
-        
-        # Handle media messages with special handlers
-        media_handlers = {
-            'photo': SPECIAL_HANDLERS.get('photo', []),
-            'document': SPECIAL_HANDLERS.get('document', []),
-            'video': SPECIAL_HANDLERS.get('video', []),
-            'audio': SPECIAL_HANDLERS.get('audio', []),
-            'voice': SPECIAL_HANDLERS.get('voice', [])
-        }
-        
-        media_handled = False
-        for media_type, handlers in media_handlers.items():
-            if media_type in message and handlers:
-                logger.info(f"🖼️ Handling {media_type} message")
-                for media_handler in handlers:
-                    try:
-                        result = media_handler(message)
-                        if result:
-                            media_handled = True
-                            if isinstance(result, dict):
-                                execute_telegram_method(result)
-                            elif hasattr(result, 'json'):
-                                result_json = result.get_json()
-                                if isinstance(result_json, dict):
-                                    execute_telegram_method(result_json)
-                            break
-                    except Exception as e:
-                        logger.error(f"❌ Error in {media_type} handler: {e}")
-                        continue
-                
-                if media_handled:
-                    break
-        
-        if media_handled:
-            return jsonify({'ok': True})
-        
-        # Unknown message type (only if no text and no media handled)
-        if 'text' not in message and not media_handled:
-            execute_telegram_method(send_telegram_message(
-                chat_id,
-                "❌ <b>Unsupported Message Type</b>\n\n"
-                "📋 <b>I can handle:</b>\n"
-                "• Text messages and commands\n"
-                "• Photos, videos, documents\n" 
-                "• Audio, voice messages\n\n"
-                "💡 <b>Try:</b> <b>/menu</b> for interactive options",
-                parse_mode='HTML'
-            ))
-        
-        return jsonify({'ok': True})
-        
-    except Exception as e:
-        logger.error(f'❌ Error handling message: {e}')
-        try:
-            execute_telegram_method(send_telegram_message(
-                message.get('chat', {}).get('id'),
-                "❌ <b>Error processing your message</b>\n\n"
-                "Please try again or use /menu for options",
-                parse_mode='HTML'
-            ))
-        except:
-            pass
-        return jsonify({'ok': True})
-
-@app.route('/health', methods=['GET'])
+@app.route('/health')
 def health_check():
     """Health check endpoint"""
+    handler_status = {}
+    for handler_name, process in handler_manager.handler_processes.items():
+        handler_status[handler_name] = {
+            'pid': process.pid,
+            'alive': process.poll() is None
+        }
+    
     return jsonify({
-        'status': 'healthy', 
-        'total_commands': len(COMMAND_HANDLERS),
-        'commands': list(COMMAND_HANDLERS.keys()),
-        'special_handlers': {k: len(v) for k, v in SPECIAL_HANDLERS.items()},
-        'active_sessions': len(SESSIONS),
+        'status': 'healthy',
+        'active_handlers': len(handler_manager.handler_processes),
+        'handler_status': handler_status,
         'timestamp': datetime.now().isoformat()
     }), 200
 
-@app.route('/debug/handlers', methods=['GET'])
-def debug_handlers():
-    """Debug endpoint to see loaded handlers"""
-    handler_details = {}
-    
-    for command, handler in COMMAND_HANDLERS.items():
-        handler_details[command] = {
-            'function': handler.__name__,
-            'module': handler.__module__
-        }
-    
-    special_details = {}
-    for handler_type, handlers in SPECIAL_HANDLERS.items():
-        special_details[handler_type] = [
-            f"{h.__module__}.{h.__name__}" for h in handlers
-        ]
-    
-    return jsonify({
-        'command_handlers': handler_details,
-        'special_handlers': special_details,
-        'sessions_count': len(SESSIONS),
-        'total_loaded': len(COMMAND_HANDLERS),
-        'status': 'working'
-    })
+@app.route('/restart/<handler_name>')
+def restart_handler(handler_name):
+    """Restart a specific handler"""
+    if handler_name in handler_manager.handler_processes:
+        # Stop current process
+        handler_manager.handler_processes[handler_name].terminate()
+        
+        # Restart
+        handler_path = handler_manager.handler_files[handler_name]['path']
+        handler_manager.start_handler(handler_name, handler_path)
+        
+        return jsonify({'status': f'Handler {handler_name} restarted'})
+    else:
+        return jsonify({'error': 'Handler not found'}), 404
 
-@app.route('/sessions', methods=['GET'])
-def list_sessions():
-    """List all active sessions"""
-    return jsonify({
-        'active_sessions': len(SESSIONS),
-        'sessions_count': len(SESSIONS),
-        'timestamp': datetime.now().isoformat()
-    })
-
-@app.route('/sessions/clear', methods=['POST'])
-def clear_sessions():
-    """Clear all sessions"""
-    global SESSIONS
-    session_count = len(SESSIONS)
-    SESSIONS = {}
-    return jsonify({
-        'message': f'Cleared {session_count} sessions',
-        'sessions_remaining': 0
-    })
+def signal_handler(signum, frame):
+    """Handle shutdown signals"""
+    logger.info("🛑 Shutdown signal received")
+    handler_manager.stop_all_handlers()
+    sys.exit(0)
 
 if __name__ == '__main__':
+    import signal
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    # Start all handlers
+    logger.info("🤖 Starting all handlers...")
+    handler_manager.start_all_handlers()
+    
+    # Start Flask app
     port = int(os.environ.get('PORT', 10000))
-    debug_mode = os.environ.get('DEBUG', 'false').lower() == 'true'
+    logger.info(f"🌐 Web server starting on port {port}")
     
-    logger.info(f"🚀 Starting Telegram Bot on port {port}")
-    logger.info(f"📋 Loaded {len(COMMAND_HANDLERS)} commands: {list(COMMAND_HANDLERS.keys())}")
-    logger.info(f"🔧 Special handlers: {[f'{k}: {len(v)}' for k, v in SPECIAL_HANDLERS.items()]}")
-    logger.info(f"💾 Global sessions initialized")
-    
-    app.run(host='0.0.0.0', port=port, debug=debug_mode)
+    try:
+        app.run(host='0.0.0.0', port=port, debug=False)
+    finally:
+        # Cleanup on exit
+        handler_manager.stop_all_handlers()
