@@ -4,6 +4,7 @@ import logging
 import importlib
 import pkgutil
 import time
+import os
 from datetime import datetime
 
 app = Flask(__name__)
@@ -184,12 +185,12 @@ logger.info(f"🎯 Total commands loaded: {len(command_handlers)}")
 @app.route('/', methods=['GET', 'POST'])
 def handle_request():
     try:
-        token = request.args.get('token')
+        token = request.args.get('token') or os.environ.get('BOT_TOKEN')
         
         if not token:
             return jsonify({
                 'error': 'Token required',
-                'solution': 'Add ?token=YOUR_BOT_TOKEN to URL'
+                'solution': 'Add ?token=YOUR_BOT_TOKEN to URL or set BOT_TOKEN environment variable'
             }), 400
 
         if request.method == 'GET':
@@ -280,4 +281,5 @@ def health_check():
     }), 200
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000, debug=False)
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port, debug=False)
