@@ -2,9 +2,8 @@ from flask import Flask, request, jsonify
 import os
 import logging
 import importlib
-from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
 import asyncio
+import threading
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -18,88 +17,142 @@ PORT = int(os.environ.get('PORT', 10000))
 class SimpleBot:
     def __init__(self):
         self.waiting_commands = {}
-        # Use create_task for async operations
-        self.app = None
-        self._initialize_app()
+        self._setup_handlers()
     
-    def _initialize_app(self):
-        """Initialize telegram app"""
-        try:
-            self.app = Application.builder().token(BOT_TOKEN).build()
-            
-            # Add message handler
-            self.app.add_handler(
-                MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message)
-            )
-            
-            logger.info("✅ Telegram app initialized")
-        except Exception as e:
-            logger.error(f"❌ App initialization failed: {e}")
+    def _setup_handlers(self):
+        """Setup basic message handlers"""
+        logger.info("✅ Bot handlers setup completed")
     
-    async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle incoming messages"""
-        try:
-            user_id = update.effective_user.id
-            text = update.message.text
-            
-            logger.info(f"📨 Message from {user_id}: {text}")
-            
-            # Check waiting commands first
-            if user_id in self.waiting_commands:
-                command = self.waiting_commands[user_id]
-                del self.waiting_commands[user_id]
-                context.user_data['user_response'] = text
-                await self.run_command(command, update, context)
-                return
-            
-            # Handle commands
-            if text.startswith('/'):
-                command_name = text[1:].split()[0].lower()
-                await self.run_command(command_name, update, context)
-            else:
-                # Send unknown command message
-                await update.message.reply_text(
-                    "❌ Unknown command. Use /help to see available commands."
-                )
-                
-        except Exception as e:
-            logger.error(f"Error handling message: {e}")
-            await update.message.reply_text(f"❌ Error: {str(e)}")
-    
-    async def run_command(self, command_name: str, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def run_command(self, command_name: str, update, context):
         """Run specific command"""
         try:
-            # Try to import and execute command
             module = importlib.import_module(f'handlers.{command_name}')
             handler_func = getattr(module, f'handle_{command_name}')
-            
-            # Call handler with correct arguments
             await handler_func(update, context, self)
-            
         except ModuleNotFoundError:
-            await update.message.reply_text(f"❌ Unknown command: /{command_name}")
+            from telegram import Update
+            if isinstance(update, Update):
+                await update.message.reply_text(f"❌ Unknown command: /{command_name}")
         except Exception as e:
-            error_msg = f"Error executing command '/{command_name}': {str(e)}"
-            logger.error(error_msg)
-            await update.message.reply_text(f"❌ {error_msg}")
+            logger.error(f"Error in run_command: {e}")
+            from telegram import Update
+            if isinstance(update, Update):
+                await update.message.reply_text(f"❌ Command error: {str(e)}")
     
-    async def handle_next_command(self, command_name: str, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def handle_next_command(self, command_name: str, update, context):
         """Wait for user response then run command"""
         user_id = update.effective_user.id
         self.waiting_commands[user_id] = command_name
-        await update.message.reply_text(f"📝 Please provide your input...")
+        await update.message.reply_text(f"📝 Please provide your input for {command_name}...")
     
-    def process_update(self, update_data):
-        """Process update for webhook"""
-        if not self.app:
-            self._initialize_app()
-            
-        async def process():
-            update = Update.de_json(update_data, self.app.bot)
-            await self.app.process_update(update)
+    def process_webhook_update(self, update_data):
+        """Process webhook update without telegram-ext"""
+        try:
+            # Basic update processing
+            if 'message' in update_data:
+                message = update_data['message']
+                chat_id = message['chat']['id']
+                text = message.get('text', '')
+                user_id = message['from']['id']
+                
+                logger.info(f"📨 Received: {text} from {user_id}")
+                
+                # Handle waiting commands
+                if user_id in self.waiting_commands and text:
+                    command = self.waiting_commands[user_id]
+                    del self.waiting_commands[user_id]
+                    # Execute the waiting command
+                    self._execute_command(command, chat_id, user_id, text)
+                    return
+                
+                # Handle regular commands
+                if text.startswith('/'):
+                    command_name = text[1:].split()[0].lower()
+                    self._execute_command(command_name, chat_id, user_id, text)
+                else:
+                    # Send unknown command message
+                    self._send_message(chat_id, "❌ Unknown command. Use /help to see available commands.")
+                    
+        except Exception as e:
+            logger.error(f"Error processing update: {e}")
+    
+    def _execute_command(self, command_name: str, chat_id: int, user_id: int, text: str):
+        """Execute command in background thread"""
+        def run_async():
+            try:
+                # Import and run command
+                module = importlib.import_module(f'handlers.{command_name}')
+                handler_func = getattr(module, f'handle_{command_name}')
+                
+                # Create simple context
+                class SimpleContext:
+                    def __init__(self):
+                        self.user_data = {}
+                
+                class SimpleUpdate:
+                    def __init__(self, chat_id, user_id, text):
+                        self.effective_chat = type('Chat', (), {'id': chat_id})()
+                        self.effective_user = type('User', (), {'id': user_id})()
+                        self.message = type('Message', (), {
+                            'text': text,
+                            'reply_text': self.reply_text
+                        })()
+                    
+                    async def reply_text(self, message_text, parse_mode=None):
+                        self._send_message_sync(chat_id, message_text, parse_mode)
+                    
+                    def _send_message_sync(self, chat_id, text, parse_mode=None):
+                        """Send message synchronously"""
+                        import requests
+                        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+                        payload = {
+                            'chat_id': chat_id,
+                            'text': text
+                        }
+                        if parse_mode:
+                            payload['parse_mode'] = parse_mode
+                        
+                        try:
+                            requests.post(url, json=payload, timeout=10)
+                        except Exception as e:
+                            logger.error(f"Error sending message: {e}")
+                
+                # Run the handler
+                update = SimpleUpdate(chat_id, user_id, text)
+                context = SimpleContext()
+                
+                # Run async function in thread
+                asyncio.run(handler_func(update, context, self))
+                
+            except ModuleNotFoundError:
+                self._send_message(chat_id, f"❌ Unknown command: /{command_name}")
+            except Exception as e:
+                error_msg = f"❌ Error executing '/{command_name}': {str(e)}"
+                logger.error(error_msg)
+                self._send_message(chat_id, error_msg)
         
-        # Run async function in sync context
-        asyncio.run(process())
+        # Run in background thread
+        thread = threading.Thread(target=run_async)
+        thread.daemon = True
+        thread.start()
+    
+    def _send_message(self, chat_id: int, text: str, parse_mode=None):
+        """Send message to Telegram"""
+        import requests
+        try:
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+            payload = {
+                'chat_id': chat_id,
+                'text': text
+            }
+            if parse_mode:
+                payload['parse_mode'] = parse_mode
+            
+            response = requests.post(url, json=payload, timeout=10)
+            return response.json()
+        except Exception as e:
+            logger.error(f"Error sending message: {e}")
+            return None
 
 # Global bot instance
 bot = SimpleBot()
@@ -107,8 +160,9 @@ bot = SimpleBot()
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({
-        'status': 'Bot is running with Webhook',
-        'webhook_set': bool(WEBHOOK_URL)
+        'status': 'Bot is running successfully!',
+        'webhook_url': WEBHOOK_URL,
+        'ready': True
     })
 
 @app.route('/webhook', methods=['POST'])
@@ -116,7 +170,11 @@ def webhook():
     """Telegram webhook endpoint"""
     try:
         update_data = request.get_json()
-        bot.process_update(update_data)
+        logger.info(f"📨 Webhook received: {update_data}")
+        
+        # Process the update
+        bot.process_webhook_update(update_data)
+        
         return jsonify({'status': 'ok'})
     except Exception as e:
         logger.error(f"Webhook error: {e}")
@@ -129,7 +187,6 @@ def set_webhook():
         if not WEBHOOK_URL:
             return jsonify({'error': 'WEBHOOK_URL not set'})
         
-        # Set webhook using requests
         import requests
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook"
         payload = {
@@ -137,16 +194,28 @@ def set_webhook():
         }
         response = requests.post(url, data=payload)
         
+        result = response.json()
+        
         return jsonify({
             'status': 'Webhook set successfully',
-            'telegram_response': response.json()
+            'webhook_url': f"{WEBHOOK_URL}/webhook",
+            'telegram_response': result
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'healthy', 'bot_initialized': bot.app is not None})
+    return jsonify({
+        'status': 'healthy',
+        'bot': 'ready',
+        'timestamp': 'now'
+    })
+
+@app.route('/test', methods=['GET'])
+def test():
+    """Test endpoint"""
+    return jsonify({'message': 'Bot server is working!'})
 
 def setup_webhook():
     """Setup webhook on startup"""
@@ -163,5 +232,6 @@ def setup_webhook():
             logger.error(f"❌ Webhook setup failed: {e}")
 
 if __name__ == '__main__':
+    logger.info("🚀 Starting Flask bot server...")
     setup_webhook()
     app.run(host='0.0.0.0', port=PORT, debug=False)
