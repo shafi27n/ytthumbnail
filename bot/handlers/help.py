@@ -1,30 +1,44 @@
-def handle_help(user_info, chat_id, message_text):
-    """Handle /help command"""
+from telegram import Update
+from telegram.ext import ContextTypes
+
+async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE, bot_core):
+    """Handle /help command with HTML formatting"""
     
     help_text = """
-🆘 <b>Help Guide</b>
+🆘 <b>Help Center - Auto Modular System</b>
 
-🤖 <b>About This Bot:</b>
-This is a fully automatic Telegram bot deployed on Render with URL token support.
+🤖 <b>About System:</b>
+This bot uses <b>fully automatic command discovery</b> with <b>Supabase</b> database.
 
-📚 <b>Available Commands:</b>
-• <code>/start</code> - Welcome message and user info
-• <code>/help</code> - This help guide  
-• <code>/status</code> - System status information
-• <code>/time</code> - Current server time
-• <code>/utils</code> - Utilities menu
+🔧 <b>Core Features:</b>
+• <code>Bot.runCommand("command")</code> - Run specific command
+• <code>Bot.handleNextCommand("command")</code> - Wait for user input
+• <code>Bot.save_data("var", "value")</code> - Save bot data
+• <code>User.save_data("var", "value")</code> - Save user data
+• HTTP requests, file uploads, keyboards
 
-🔧 <b>Technical Features:</b>
-• Token via URL parameter (?token=YOUR_TOKEN)
-• HTML message formatting
-• Auto command discovery
+💡 <b>Available HTML Formatting:</b>
+• <b>Bold</b> - <code>&lt;b&gt;text&lt;/b&gt;</code>
+• <i>Italic</i> - <code>&lt;i&gt;text&lt;/i&gt;</code>
+• <code>Monospace</code> - <code>&lt;code&gt;text&lt;/code&gt;</code>
+• <a href="https://example.com">Link</a> - <code>&lt;a href="url"&gt;text&lt;/a&gt;</code>
 
-💡 <b>URL Token Usage:</b>
-<code>https://yourapp.onrender.com/?token=YOUR_BOT_TOKEN</code>
+🎯 <b>Available Commands:</b>
+Use <code>/start</code> to see all loaded commands.
 
-⚠️ <b>Note:</b> Token can also be set via BOT_TOKEN environment variable.
+🔧 <b>Developer Features:</b>
+• Multi-command files: <code>cmd1|cmd2|cmd3.py</code>
+• Auto error handling
+• Session management
+• Database persistence
 
-🔗 <b>Need Help?</b> Contact the developer.
+⚠️ <b>Important Notes:</b>
+• Don't use <>& symbols directly in HTML
+• Use HTML entities
+• URLs must be properly formatted
+
+📚 <b>Need more help?</b>
+Check the project documentation.
     """
     
-    return help_text
+    await bot_core.send_message(update, help_text)
