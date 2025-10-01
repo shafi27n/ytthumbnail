@@ -1,6 +1,7 @@
 import os
-from supabase import create_client, Client
 import logging
+from supabase import create_client, Client
+import supabase
 
 logger = logging.getLogger(__name__)
 
@@ -22,16 +23,27 @@ class Database:
             url = os.environ.get('SUPABASE_URL', 'https://megohojyelqspypejlpo.supabase.co')
             key = os.environ.get('SUPABASE_KEY', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1lZ29ob2p5ZWxxc3B5cGVqbHBvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTIzMjQxMDAsImV4cCI6MjA2NzkwMDEwMH0.d3qS8Z0ihWXubYp7kYLsGc0qEpDC1iOdxK9QdfozXWo')
             
-            self.supabase = create_client(url, key)
+            # Check supabase version and initialize accordingly
+            supabase_version = getattr(supabase, '__version__', '1.0.0')
+            
+            if supabase_version.startswith('2.'):
+                # For supabase-py v2.x
+                self.supabase = create_client(url, key)
+            else:
+                # For older versions
+                self.supabase = create_client(url, key)
+                
             logger.info("✅ Supabase connection initialized")
         except Exception as e:
             logger.error(f"❌ Failed to initialize Supabase: {e}")
+            # Continue without database - bot will still work but without persistence
             self.supabase = None
     
     def save_bot_data(self, variable: str, value: str):
         """Save data for all users (bot-level data)"""
         try:
             if not self.supabase:
+                logger.warning("❌ Supabase not available - data not saved")
                 return False
             
             result = self.supabase.table('bot_data').upsert({
@@ -61,6 +73,7 @@ class Database:
         """Save data for specific user"""
         try:
             if not self.supabase:
+                logger.warning("❌ Supabase not available - user data not saved")
                 return False
             
             result = self.supabase.table('user_data').upsert({
