@@ -21,7 +21,7 @@ def handle_help(user_info, chat_id, message_text):
     """Handle /help command"""
     
     available_commands = get_available_commands()
-    commands_text = "\n".join([f"• <code>{cmd}</code>" for cmd in available_commands])
+    commands_text = "\n".join([f"• <b>{cmd}</b>" for cmd in available_commands])
     
     help_text = f"""
 🆘 <b>Help Center - FIXED VERSION</b>
@@ -36,9 +36,9 @@ def handle_help(user_info, chat_id, message_text):
 • Next command handler
 
 💡 <b>Try these:</b>
-• <code>/start</code> - Welcome message
-• <code>/ping</code> or <code>/pong</code> - Test commands
-• <code>/echo Hello</code> - Echo your message
+• <b>/start</b> - Welcome message
+• <b>/ping</b> or <b>/pong</b> - Test commands
+• <b>/echo Hello</b> - Echo your message
 
 ✅ <b>Status:</b> All commands should work now!
 """
