@@ -18,9 +18,13 @@ def get_bot_manager(token=None):
         bot_manager.base_url = f"https://api.telegram.org/bot{token}"
     return bot_manager
 
-@app.route('/', methods=['GET', 'POST'])
+@app.route('/', methods=['GET', 'POST', 'HEAD'])
 def handle_request():
     try:
+        # Handle HEAD requests first (for health checks)
+        if request.method == 'HEAD':
+            return '', 200
+            
         # Get token from URL parameter or environment
         token = request.args.get('token') or os.environ.get('BOT_TOKEN')
         
@@ -149,14 +153,19 @@ def format_response(response, chat_id):
             'parse_mode': 'HTML'
         })
 
-@app.route('/health')
+@app.route('/health', methods=['GET', 'HEAD'])
 def health_check():
+    """Health check endpoint"""
+    if request.method == 'HEAD':
+        return '', 200
+        
     return jsonify({
         'status': 'healthy', 
         'total_commands': len(bot_manager.command_handlers),
         'commands': list(bot_manager.command_handlers.keys()),
         'waiting_users': len(bot_manager.waiting_commands),
-        'timestamp': datetime.now().isoformat()
+        'timestamp': datetime.now().isoformat(),
+        'supabase_status': 'connected' if bot_manager.db.supabase else 'disconnected'
     }), 200
 
 @app.route('/setup')
@@ -181,7 +190,11 @@ def setup_guide():
             'Method 1 - URL Token: https://your-app.render.com/?token=YOUR_BOT_TOKEN',
             'Method 2 - Environment Variable: Set BOT_TOKEN in Render dashboard',
             'Method 3 - Webhook: Set webhook with token in URL'
-        ]
+        ],
+        'current_status': {
+            'total_commands': len(bot_manager.command_handlers),
+            'supabase_connected': bot_manager.db.supabase is not None
+        }
     })
 
 # Auto-discover handlers on startup
