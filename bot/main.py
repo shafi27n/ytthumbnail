@@ -31,38 +31,48 @@ except ImportError as e:
                 pending = self.pending_responses.pop(chat_id)
                 return f"✅ Processed pending response: {message_text}"
             return None
+        def set_user_data(self, user_id, key, value): pass
+        def get_user_data(self, user_id, key, default=None): return default
     bot_manager = SimpleManager()
 
 # Command handlers registry
 COMMAND_HANDLERS = {}
 
 def load_handlers():
-    """Load all command handlers"""
-    handler_files = {
-        'start': ['handle_start'],
-        'help': ['handle_help'],
-        'status': ['handle_status'],
-        'time': ['handle_time'],
-        'utils_tools': ['handle_utils', 'handle_tools', 'handle_demo_response']
-    }
+    """Load all command handlers with proper error handling"""
+    handlers_to_load = [
+        'start',
+        'help', 
+        'status',
+        'time',
+        'utils_tools'
+    ]
     
-    for file_name, functions in handler_files.items():
+    loaded_count = 0
+    
+    for handler_name in handlers_to_load:
         try:
-            module = importlib.import_module(f'bot.handlers.{file_name}')
-            for func_name in functions:
-                if hasattr(module, func_name):
-                    # Extract command name from function name
-                    cmd_name = func_name.replace('handle_', '')
-                    if cmd_name == 'demo_response':
-                        continue  # Skip internal handler
-                    COMMAND_HANDLERS[f'/{cmd_name}'] = getattr(module, func_name)
-                    logger.info(f"✅ Loaded command: /{cmd_name}")
+            module = importlib.import_module(f'bot.handlers.{handler_name}')
+            logger.info(f"✅ Successfully imported: {handler_name}")
+            
+            # Get all functions that start with 'handle_'
+            for attr_name in dir(module):
+                if attr_name.startswith('handle_'):
+                    command_name = attr_name.replace('handle_', '')
+                    if command_name != 'demo_response':  # Skip internal handler
+                        COMMAND_HANDLERS[f'/{command_name}'] = getattr(module, attr_name)
+                        logger.info(f"✅ Loaded command: /{command_name}")
+                        loaded_count += 1
+                        
         except ImportError as e:
-            logger.warning(f"⚠️ Could not load {file_name}: {e}")
+            logger.error(f"❌ Failed to import {handler_name}: {e}")
+        except Exception as e:
+            logger.error(f"❌ Error loading {handler_name}: {e}")
+    
+    logger.info(f"🎯 Total commands loaded: {loaded_count}")
 
 # Load handlers at startup
 load_handlers()
-logger.info(f"🎯 Total commands loaded: {len(COMMAND_HANDLERS)}")
 
 @app.route('/', methods=['GET', 'POST'])
 def handle_request():
@@ -84,11 +94,10 @@ def handle_request():
         if request.method == 'GET':
             return jsonify({
                 'status': 'success',
-                'message': 'Bot is running on Render with URL token support!',
+                'message': 'Bot is running on Render!',
                 'available_commands': list(COMMAND_HANDLERS.keys()),
                 'total_commands': len(COMMAND_HANDLERS),
                 'token_received': True,
-                'token_prefix': token[:10] + '...' if token else None,
                 'timestamp': datetime.now().isoformat()
             })
 
@@ -109,15 +118,17 @@ def handle_request():
                 logger.info(f"📨 Message from {user_name}: {text}")
                 
                 # Check for pending responses
-                pending_response = bot_manager.process_pending_response(chat_id, text, user_info)
-                if pending_response:
-                    return jsonify(bot_manager.send_message(chat_id, pending_response))
+                if hasattr(bot_manager, 'process_pending_response'):
+                    pending_response = bot_manager.process_pending_response(chat_id, text, user_info)
+                    if pending_response:
+                        return jsonify(bot_manager.send_message(chat_id, pending_response))
                 
                 # Process commands
                 for command, handler in COMMAND_HANDLERS.items():
                     if text.startswith(command):
                         try:
-                            response_text = handler(user_info, chat_id, text, bot_manager=bot_manager)
+                            # Call handler with only required parameters
+                            response_text = handler(user_info, chat_id, text)
                             return jsonify(bot_manager.send_message(chat_id, response_text))
                         except Exception as e:
                             logger.error(f"Command execution error: {e}")
@@ -150,13 +161,8 @@ def health_check():
         'timestamp': datetime.now().isoformat()
     })
 
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    """Alternative webhook endpoint"""
-    return handle_request()
-
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     logger.info(f"🚀 Server starting on port {port}")
-    logger.info(f"📊 Loaded {len(COMMAND_HANDLERS)} commands")
+    logger.info(f"📊 Loaded {len(COMMAND_HANDLERS)} commands: {list(COMMAND_HANDLERS.keys())}")
     app.run(host='0.0.0.0', port=port, debug=False)
