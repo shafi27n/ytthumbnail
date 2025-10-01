@@ -1,168 +1,144 @@
 from flask import Flask, request, jsonify
 import os
 import logging
-import importlib
 from datetime import datetime
+from bot.core.bot_manager import BotManager, UserManager
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Import bot manager
-try:
-    from bot.core.bot_manager import bot_manager
-    logger.info("✅ Bot manager imported successfully")
-except ImportError as e:
-    logger.error(f"❌ Bot manager import failed: {e}")
-    # Fallback manager
-    class SimpleManager:
-        def __init__(self): 
-            self.user_sessions = {}
-            self.pending_responses = {}
-        def set_token(self, token): 
-            self.token = token
-            logger.info(f"✅ Token set: {token[:10]}...")
-        def send_message(self, chat_id, text, **kwargs): 
-            return {'method': 'sendMessage', 'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'}
-        def handle_next_command(self, chat_id, command, user_info=None):
-            self.pending_responses[chat_id] = {'expected_command': command, 'user_info': user_info}
-        def process_pending_response(self, chat_id, message_text, user_info):
-            if chat_id in self.pending_responses:
-                pending = self.pending_responses.pop(chat_id)
-                return f"✅ Processed pending response: {message_text}"
-            return None
-        def set_user_data(self, user_id, key, value): pass
-        def get_user_data(self, user_id, key, default=None): return default
-    bot_manager = SimpleManager()
-
-# Command handlers registry
-COMMAND_HANDLERS = {}
-
-def load_handlers():
-    """Load all command handlers with proper error handling"""
-    handlers_to_load = [
-        'start',
-        'help', 
-        'status',
-        'time',
-        'utils_tools'
-    ]
-    
-    loaded_count = 0
-    
-    for handler_name in handlers_to_load:
-        try:
-            module = importlib.import_module(f'bot.handlers.{handler_name}')
-            logger.info(f"✅ Successfully imported: {handler_name}")
-            
-            # Get all functions that start with 'handle_'
-            for attr_name in dir(module):
-                if attr_name.startswith('handle_'):
-                    command_name = attr_name.replace('handle_', '')
-                    if command_name != 'demo_response':  # Skip internal handler
-                        COMMAND_HANDLERS[f'/{command_name}'] = getattr(module, attr_name)
-                        logger.info(f"✅ Loaded command: /{command_name}")
-                        loaded_count += 1
-                        
-        except ImportError as e:
-            logger.error(f"❌ Failed to import {handler_name}: {e}")
-        except Exception as e:
-            logger.error(f"❌ Error loading {handler_name}: {e}")
-    
-    logger.info(f"🎯 Total commands loaded: {loaded_count}")
-
-# Load handlers at startup
-load_handlers()
+# Initialize bot manager
+bot_manager = BotManager()
 
 @app.route('/', methods=['GET', 'POST'])
 def handle_request():
     try:
-        # Get token from URL parameter OR environment variable
         token = request.args.get('token') or os.environ.get('BOT_TOKEN')
         
         if not token:
             return jsonify({
-                'status': 'error',
-                'message': 'Token required',
-                'usage': 'Add ?token=YOUR_BOT_TOKEN to URL or set BOT_TOKEN environment variable',
-                'available_commands': list(COMMAND_HANDLERS.keys())
+                'error': 'Token required',
+                'solution': 'Add ?token=YOUR_BOT_TOKEN to URL or set BOT_TOKEN environment variable'
             }), 400
-
-        # Set token in bot manager
-        bot_manager.set_token(token)
 
         if request.method == 'GET':
             return jsonify({
-                'status': 'success',
-                'message': 'Bot is running on Render!',
-                'available_commands': list(COMMAND_HANDLERS.keys()),
-                'total_commands': len(COMMAND_HANDLERS),
-                'token_received': True,
-                'timestamp': datetime.now().isoformat()
+                'status': 'Bot is running with AUTO-MODULAR SUPER SYSTEM',
+                'available_commands': list(bot_manager.command_handlers.keys()),
+                'total_commands': len(bot_manager.command_handlers),
+                'timestamp': datetime.now().isoformat(),
+                'features': [
+                    'Auto command discovery',
+                    'Supabase integration', 
+                    'User data management',
+                    'Bot data management',
+                    'Next command handling',
+                    'Multi-command files',
+                    'Full Telegram API support'
+                ]
             })
 
         if request.method == 'POST':
             update = request.get_json()
             
             if not update:
-                return jsonify({'status': 'error', 'message': 'Invalid JSON data'}), 400
+                return jsonify({'error': 'Invalid JSON data'}), 400
             
-            # Handle message updates
             if 'message' in update:
-                message = update['message']
-                chat_id = message['chat']['id']
-                text = message.get('text', '').strip()
-                user_info = message.get('from', {})
-                
-                user_name = user_info.get('first_name', 'Unknown')
-                logger.info(f"📨 Message from {user_name}: {text}")
-                
-                # Check for pending responses
-                if hasattr(bot_manager, 'process_pending_response'):
-                    pending_response = bot_manager.process_pending_response(chat_id, text, user_info)
-                    if pending_response:
-                        return jsonify(bot_manager.send_message(chat_id, pending_response))
-                
-                # Process commands
-                for command, handler in COMMAND_HANDLERS.items():
-                    if text.startswith(command):
-                        try:
-                            # Call handler with only required parameters
-                            response_text = handler(user_info, chat_id, text)
-                            return jsonify(bot_manager.send_message(chat_id, response_text))
-                        except Exception as e:
-                            logger.error(f"Command execution error: {e}")
-                            return jsonify(bot_manager.send_message(
-                                chat_id, 
-                                f"❌ Command error: {str(e)}"
-                            ))
-                
-                # Unknown command response
-                if COMMAND_HANDLERS:
-                    available_cmds = "\n".join([f"• <code>{cmd}</code>" for cmd in COMMAND_HANDLERS.keys()])
-                    response_text = f"❌ <b>Unknown Command:</b> <code>{text}</code>\n\n📋 <b>Available Commands:</b>\n{available_cmds}"
-                else:
-                    response_text = "❌ <b>No commands loaded.</b> Check server logs."
-                
-                return jsonify(bot_manager.send_message(chat_id, response_text))
+                return handle_message(update)
             
-            return jsonify({'status': 'ok', 'message': 'No message to process'})
+            if 'callback_query' in update:
+                return handle_callback_query(update)
+            
+            return jsonify({'ok': True})
 
     except Exception as e:
-        logger.error(f'🚨 Server error: {e}')
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        logger.error(f'Error: {e}')
+        return jsonify({'error': 'Processing failed'}), 500
 
-@app.route('/health', methods=['GET'])
-def health_check():
+def handle_message(update):
+    """Handle incoming messages"""
+    chat_id = update['message']['chat']['id']
+    message_text = update['message'].get('text', '').strip()
+    user_info = update['message'].get('from', {})
+    user_id = user_info.get('id')
+    message_id = update['message'].get('message_id')
+    
+    logger.info(f"Message from {user_info.get('first_name')}: {message_text}")
+    
+    # Initialize user manager
+    user_manager = UserManager(user_id)
+    
+    # Check if user has a waiting command
+    waiting_command = bot_manager.get_waiting_command(user_id)
+    if waiting_command:
+        return jsonify(bot_manager.run_command(waiting_command, user_info, chat_id, message_text))
+    
+    # Find and execute command handler
+    for command in bot_manager.command_handlers.keys():
+        if message_text.startswith(command):
+            response = bot_manager.run_command(command, user_info, chat_id, message_text)
+            
+            # If response is a string, send it as message
+            if isinstance(response, str):
+                return jsonify({
+                    'method': 'sendMessage',
+                    'chat_id': chat_id,
+                    'text': response,
+                    'parse_mode': 'HTML'
+                })
+            # If response is a dict (for complex responses), return as-is
+            elif isinstance(response, dict):
+                response['chat_id'] = chat_id
+                return jsonify(response)
+    
+    # Default response for unknown commands
+    available_commands = "\n".join([f"• <code>{cmd}</code>" for cmd in bot_manager.command_handlers.keys()])
     return jsonify({
-        'status': 'healthy',
-        'total_commands': len(COMMAND_HANDLERS),
-        'commands': list(COMMAND_HANDLERS.keys()),
-        'timestamp': datetime.now().isoformat()
+        'method': 'sendMessage',
+        'chat_id': chat_id,
+        'text': f"❌ <b>Unknown Command:</b> <code>{message_text}</code>\n\n"
+                f"📋 <b>Available Commands:</b>\n{available_commands}\n\n"
+                f"💡 <b>Help:</b> <code>/help</code>",
+        'parse_mode': 'HTML'
     })
 
+def handle_callback_query(update):
+    """Handle inline button callbacks"""
+    callback_query = update['callback_query']
+    data = callback_query.get('data', '')
+    user_info = callback_query.get('from', {})
+    chat_id = callback_query['message']['chat']['id']
+    message_id = callback_query['message']['message_id']
+    
+    logger.info(f"Callback from {user_info.get('first_name')}: {data}")
+    
+    # You can implement callback handling logic here
+    # For now, just acknowledge the callback
+    return jsonify({
+        'method': 'answerCallbackQuery',
+        'callback_query_id': callback_query['id'],
+        'text': 'Callback received!'
+    })
+
+@app.route('/health')
+def health_check():
+    return jsonify({
+        'status': 'healthy', 
+        'total_commands': len(bot_manager.command_handlers),
+        'commands': list(bot_manager.command_handlers.keys()),
+        'waiting_users': len(bot_manager.waiting_commands),
+        'timestamp': datetime.now().isoformat()
+    }), 200
+
+# Auto-discover handlers on startup
 if __name__ == '__main__':
+    bot_manager.auto_discover_handlers()
+    logger.info(f"🎯 Total commands loaded: {len(bot_manager.command_handlers)}")
+    
     port = int(os.environ.get('PORT', 10000))
-    logger.info(f"🚀 Server starting on port {port}")
-    logger.info(f"📊 Loaded {len(COMMAND_HANDLERS)} commands: {list(COMMAND_HANDLERS.keys())}")
     app.run(host='0.0.0.0', port=port, debug=False)
+else:
+    # For gunicorn
+    bot_manager.auto_discover_handlers()
