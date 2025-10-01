@@ -1,4 +1,4 @@
-from supabase import create_client
+import requests
 import logging
 
 logger = logging.getLogger(__name__)
@@ -8,68 +8,63 @@ SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJ
 
 class BotDatabase:
     def __init__(self):
-        try:
-            self.client = create_client(SUPABASE_URL, SUPABASE_KEY)
-            logger.info("✅ Supabase connected")
-        except Exception as e:
-            logger.error(f"❌ Supabase connection failed: {e}")
-            self.client = None
+        self.url = SUPABASE_URL
+        self.key = SUPABASE_KEY
+        self.headers = {
+            'Authorization': f'Bearer {self.key}',
+            'Content-Type': 'application/json',
+            'apikey': self.key
+        }
+        logger.info("✅ Database initialized")
     
-    def save_bot_data(self, key: str, value: str):
-        """Save bot-level data"""
-        if not self.client:
-            return False
+    def save_bot_data(self, key, value):
+        """Save bot data using Supabase REST API"""
         try:
-            # Simple implementation - adjust based on your table structure
-            result = self.client.table('bot_data').upsert({
+            data = {
                 'key': key,
                 'value': value
-            }).execute()
-            return True
+            }
+            response = requests.post(
+                f'{self.url}/rest/v1/bot_data',
+                headers=self.headers,
+                json=data
+            )
+            return response.status_code == 201
         except Exception as e:
             logger.error(f"Error saving bot data: {e}")
             return False
     
-    def save_user_data(self, user_id: int, key: str, value: str):
-        """Save user-specific data"""
-        if not self.client:
-            return False
+    def save_user_data(self, user_id, key, value):
+        """Save user data using Supabase REST API"""
         try:
-            result = self.client.table('user_data').upsert({
+            data = {
                 'user_id': user_id,
                 'key': key,
                 'value': value
-            }).execute()
-            return True
+            }
+            response = requests.post(
+                f'{self.url}/rest/v1/user_data',
+                headers=self.headers,
+                json=data
+            )
+            return response.status_code == 201
         except Exception as e:
             logger.error(f"Error saving user data: {e}")
             return False
     
-    def get_user_data(self, user_id: int, key: str, default=None):
+    def get_user_data(self, user_id, key, default=None):
         """Get user data"""
-        if not self.client:
-            return default
         try:
-            result = self.client.table('user_data')\
-                .select('value')\
-                .eq('user_id', user_id)\
-                .eq('key', key)\
-                .execute()
-            
-            if result.data:
-                return result.data[0]['value']
+            response = requests.get(
+                f'{self.url}/rest/v1/user_data?user_id=eq.{user_id}&key=eq.{key}',
+                headers=self.headers
+            )
+            if response.status_code == 200 and response.json():
+                return response.json()[0]['value']
             return default
         except Exception as e:
             logger.error(f"Error getting user data: {e}")
             return default
 
-# Create global instance
+# Global instance
 db = BotDatabase()
-
-# Shortcut functions
-def Bot():
-    from app import bot
-    return bot
-
-def User(user_id: int):
-    return db
