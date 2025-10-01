@@ -1,30 +1,33 @@
-from telegram import Update
-from telegram.ext import ContextTypes
+import asyncio
 from database import db
 
-async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE, bot):
-    user = update.effective_user
+async def handle_start(update, context, bot):
+    """Handle /start command"""
+    
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
     
     # Save user data
-    db.save_user_data(user.id, 'first_name', user.first_name)
-    if user.username:
-        db.save_user_data(user.id, 'username', user.username)
+    db.save_user_data(user_id, 'started', 'true')
     
-    text = f"""
-👋 Hello *{user.first_name}*!
+    welcome_text = f"""
+👋 Welcome to Simple Bot!
 
-🤖 *Welcome to Simple Bot*
+🤖 *This bot features:*
+• Automatic command loading
+• Webhook support  
+• Simple setup
 
-🔧 *Available Commands:*
+🔧 *Available commands:*
 /start - Start bot
 /help - Show help
+/test - Test command
 
-💡 *How to use:*
-Just send any command starting with /
+💡 *Your info:*
+• User ID: `{user_id}`
+• Chat ID: `{chat_id}`
 
-📊 *Your Info:*
-• User ID: `{user.id}`
-• Chat ID: `{update.effective_chat.id}`
+Send /help for more information.
 """
     
-    await update.message.reply_text(text, parse_mode='Markdown')
+    await update.message.reply_text(welcome_text, parse_mode='Markdown')
