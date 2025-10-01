@@ -17,11 +17,15 @@ logger = logging.getLogger(__name__)
 SUPABASE_URL = 'https://megohojyelqspypejlpo.supabase.co'
 SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1lZ29ob2p5ZWxxc3B5cGVqbHBvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTIzMjQxMDAsImV4cCI6MjA2NzkwMDEwMH0.d3qS8Z0ihWXubYp7kYLsGc0qEpDC1iOdxK9QdfozXwo'
 
+# Add this with other global storage variables
+telegram_sessions = {}  # Add this line
+
 # Global storage
 user_sessions = {}
 bot_data = {}
 command_handlers = {}
 next_command_handlers = {}
+telegram_sessions = {}  # Add this for Telegram sessions
 
 class Bot:
     @staticmethod
