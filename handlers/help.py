@@ -13,7 +13,7 @@ def handle(user_info, chat_id, message_text):
 • <b>/logout</b> - Logout from account
 
 📤 <b>Messaging:</b>
-• <b>/send</b> - Send message via account
+• <b>/send</code> - Send message via account
 
 🔧 <b>How to use:</b>
 

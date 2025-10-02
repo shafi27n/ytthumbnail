@@ -1,18 +1,14 @@
-import asyncio
-from app import telegram_manager
+from app import telegram_manager, run_async
 
 def handle(user_info, chat_id, message_text):
     """Handle /accounts command - show logged in accounts"""
     
     user_id = user_info.get('id')
     
-    # Get user accounts
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    accounts = loop.run_until_complete(
+    # Get user accounts using run_async helper
+    accounts = run_async(
         telegram_manager.get_user_accounts(user_id)
     )
-    loop.close()
     
     if not accounts:
         return """
@@ -24,7 +20,7 @@ You haven't logged in to any Telegram accounts yet!
 <code>/login phone_number</code>
 
 💡 <b>Example:</b>
-<b>/login 1234567890</b>
+<code>/login 1234567890</code>
 
 📱 You'll receive verification code via Telegram
 """

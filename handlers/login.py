@@ -1,5 +1,4 @@
-import asyncio
-from app import telegram_manager, Bot
+from app import telegram_manager, run_async
 
 def handle(user_info, chat_id, message_text):
     """Handle /login command - login to telegram account"""
@@ -11,9 +10,10 @@ def handle(user_info, chat_id, message_text):
 🔐 <b>Login to your Telegram account</b>
 
 📝 <b>Usage:</b>
-<b>/login phone_number</b>
+<code>/login phone_number</code>
 
 💡 <b>Examples:</b>
+• <code>/login 1234567890</code>
 • <code>/login 8801712345678</code>
 
 🌍 <b>Format:</b> Country code + number (without +)
@@ -30,12 +30,9 @@ def handle(user_info, chat_id, message_text):
     if not phone_number.isdigit():
         return "❌ <b>Invalid phone number!</b> Use digits only (without +)"
     
-    # Start login process
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    result = loop.run_until_complete(
+    # Start login process using run_async helper
+    result = run_async(
         telegram_manager.login_with_phone(phone_number, user_info, chat_id)
     )
-    loop.close()
     
     return result

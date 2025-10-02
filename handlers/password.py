@@ -1,5 +1,4 @@
-import asyncio
-from app import telegram_manager
+from app import telegram_manager, run_async
 
 def handle(user_info, chat_id, message_text):
     """Handle /password command - verify 2FA password"""
@@ -12,7 +11,7 @@ def handle(user_info, chat_id, message_text):
 <code>/password login_id your_password</code>
 
 💡 <b>Example:</b>
-<b>/password abc123 mypassword123</b>
+<code>/password abc123 mypassword123</code>
 
 🔍 <b>Get login_id from:</b> /login command
 """
@@ -24,12 +23,9 @@ def handle(user_info, chat_id, message_text):
     login_id = parts[1]
     password = ' '.join(parts[2:])  # Password may contain spaces
     
-    # Verify password
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    result = loop.run_until_complete(
+    # Verify password using run_async helper
+    result = run_async(
         telegram_manager.verify_password(login_id, password, user_info, chat_id)
     )
-    loop.close()
     
     return result

@@ -55,7 +55,5 @@ Manage multiple Telegram accounts from one place with advanced features!
 
 💡 <b>Need help?</b> Use <code>/help</code> for detailed instructions.
 
-📞 <b>Support:</b> Contact if you face any issues.
-
 Let's get started! Try <code>/login your_phone_number</code>
 """

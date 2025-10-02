@@ -1,5 +1,4 @@
-import asyncio
-from app import telegram_manager
+from app import telegram_manager, run_async
 
 def handle(user_info, chat_id, message_text):
     """Handle /send command - send message via specific account"""
@@ -9,7 +8,7 @@ def handle(user_info, chat_id, message_text):
 📤 <b>Send Message</b>
 
 📝 <b>Usage:</b>
-<b>/send phone_number | target | message</b>
+<code>/send phone_number | target | message</code>
 
 💡 <b>Examples:</b>
 • <code>/send 1234567890 | username | Hello!</code>
@@ -33,12 +32,9 @@ def handle(user_info, chat_id, message_text):
     
     user_id = user_info.get('id')
     
-    # Send message
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    success, result = loop.run_until_complete(
+    # Send message using run_async helper
+    success, result = run_async(
         telegram_manager.send_message_via_account(user_id, phone_number, target, message)
     )
-    loop.close()
     
     return result

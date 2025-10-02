@@ -8,7 +8,7 @@ def handle(user_info, chat_id, message_text):
 🚪 <b>Logout Account</b>
 
 📝 <b>Usage:</b>
-<b>/logout phone_number</b>
+<code>/logout phone_number</code>
 
 💡 <b>Example:</b>
 <code>/logout 1234567890</code>
@@ -18,7 +18,7 @@ def handle(user_info, chat_id, message_text):
 • Log you out from this device
 • Require login again to use
 
-📋 <b>First get phone numbers from:</b> <b>/accounts</b>
+📋 <b>First get phone numbers from:</b> <code>/accounts</code>
 """
     
     phone_number = message_text[8:].strip()
@@ -31,9 +31,9 @@ def handle(user_info, chat_id, message_text):
         return f"""
 ❌ <b>Account not found!</b>
 
-Phone: <code>{phone_number}</code>
+📱 <b>Phone:</b> <code>{phone_number}</code>
 
-🔍 <b>Check your accounts:</b> <b>/accounts</b>
+🔍 <b>Check your accounts:</b> <code>/accounts</code>
 """
     
     # Deactivate session
@@ -46,7 +46,7 @@ Phone: <code>{phone_number}</code>
 📱 <b>Account:</b> <code>{phone_number}</code>
 🔐 <b>Session removed from database</b>
 
-📋 <b>Remaining accounts:</b> <b>/accounts</b>
+📋 <b>Remaining accounts:</b> <code>/accounts</code>
 """
     else:
         return f"""

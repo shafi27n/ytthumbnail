@@ -1,5 +1,4 @@
-import asyncio
-from app import telegram_manager
+from app import telegram_manager, run_async
 
 def handle(user_info, chat_id, message_text):
     """Handle /use command - switch to specific account"""
@@ -12,35 +11,33 @@ def handle(user_info, chat_id, message_text):
 <code>/use phone_number</code>
 
 💡 <b>Example:</b>
-<b>/use 1234567890</b>
+<code>/use 1234567890</code>
 
-📋 <b>First get phone numbers from:</b> <b>/accounts</b>
+📋 <b>First get phone numbers from:</b> <code>/accounts</code>
 """
     
     phone_number = message_text[5:].strip()
     
     # Get user accounts to verify
     user_id = user_info.get('id')
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    accounts = loop.run_until_complete(
+    accounts = run_async(
         telegram_manager.get_user_accounts(user_id)
     )
-    loop.close()
     
     # Check if account exists
     account_exists = any(acc['phone'] == phone_number for acc in accounts)
     
     if not account_exists:
+        available_phones = ', '.join([acc['phone'] for acc in accounts]) if accounts else 'None'
         return f"""
 ❌ <b>Account not found!</b>
 
-Phone: <code>{phone_number}</code>
+📱 <b>Phone:</b> <code>{phone_number}</code>
 
 📋 <b>Your available accounts:</b>
-{', '.join([acc['phone'] for acc in accounts]) if accounts else 'None'}
+{available_phones}
 
-🔍 <b>Check accounts:</b> <b>/accounts</b>
+🔍 <b>Check accounts:</b> <code>/accounts</code>
 """
     
     return f"""

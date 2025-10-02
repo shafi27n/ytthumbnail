@@ -1,5 +1,4 @@
-import asyncio
-from app import telegram_manager
+from app import telegram_manager, run_async
 
 def handle(user_info, chat_id, message_text):
     """Handle /verify command - verify login code"""
@@ -12,7 +11,7 @@ def handle(user_info, chat_id, message_text):
 <code>/verify login_id code</code>
 
 💡 <b>Example:</b>
-<b>/verify abc123 123456</b>
+<code>/verify abc123 123456</code>
 
 🔍 <b>Get login_id from:</b> /login command
 """
@@ -27,12 +26,9 @@ def handle(user_info, chat_id, message_text):
     if not code.isdigit():
         return "❌ <b>Invalid code!</b> Code must be digits only."
     
-    # Verify code
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    result = loop.run_until_complete(
+    # Verify code using run_async helper
+    result = run_async(
         telegram_manager.verify_code(login_id, code, user_info, chat_id)
     )
-    loop.close()
     
     return result
