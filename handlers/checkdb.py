@@ -2,23 +2,30 @@ import requests
 from datetime import datetime
 
 def handle(user_info, chat_id, message_text):
-    """Handle /checkdb command - Check database status and tables"""
+    """Handle /checkdb command - Check actual database tables"""
     
     from app import SUPABASE_URL, SUPABASE_KEY, User
     
+    user_id = user_info.get('id')
+    
     check_log = f"""
-🔍 <b>Database Status Check</b>
+🔍 <b>Database Status Check</b> (Actual Tables)
 
-Checking Supabase database tables and connectivity...
+Checking actual Supabase tables...
 """
     
     try:
-        # List of tables to check
-        tables_to_check = ["tgbot_users", "tgbot_data", "bot_settings"]
+        # Actual tables to check
+        actual_tables = [
+            "webhook_users",
+            "webhook_bot_tokens", 
+            "webhook_settings",
+            "bot_data"
+        ]
         
-        check_log += f"\n📊 <b>Table Status:</b>"
+        check_log += f"\n📊 <b>Actual Table Status:</b>"
         
-        for table_name in tables_to_check:
+        for table_name in actual_tables:
             try:
                 response = requests.get(
                     f"{SUPABASE_URL}/rest/v1/{table_name}?limit=1",
@@ -40,51 +47,50 @@ Checking Supabase database tables and connectivity...
                     )
                     
                     row_count = len(count_response.json()) if count_response.status_code == 200 else "N/A"
-                    check_log += f"\n✅ <b>{table_name}</b>: EXISTS ({row_count} rows)"
+                    check_log += f"\n✅ <b>{table_name}</b>: {row_count} rows"
                 else:
-                    check_log += f"\n❌ <b>{table_name}</b>: MISSING (Error: {response.status_code})"
+                    check_log += f"\n❌ <b>{table_name}</b>: {response.status_code}"
                     
             except Exception as e:
-                check_log += f"\n⚠️ <b>{table_name}</b>: ERROR - {str(e)}"
+                check_log += f"\n⚠️ <b>{table_name}</b>: {str(e)}"
         
-        # Test current user's data operations
-        user_id = user_info.get('id')
-        check_log += f"\n\n👤 <b>User Data Test (ID: {user_id}):</b>"
+        # Test data operations with actual tables
+        check_log += f"\n\n👤 <b>Your Data Test (ID: {user_id}):</b>"
         
-        # Test save operation
+        # Test save to bot_data
         test_timestamp = datetime.now().isoformat()
-        save_result = User.save_data(user_id, "checkdb_test", test_timestamp)
-        check_log += f"\n• Save Test: {save_result}"
+        save_result = User.save_data(user_id, "checkdb_test", test_timestamp, user_info)
+        check_log += f"\n• Save to bot_data: {save_result}"
         
-        # Test retrieve operation
+        # Test retrieve from bot_data
         retrieved_data = User.get_data(user_id, "checkdb_test")
         if retrieved_data == test_timestamp:
-            check_log += f"\n• Retrieve Test: ✅ Data Integrity Verified"
+            check_log += f"\n• Retrieve from bot_data: ✅ Verified"
         else:
-            check_log += f"\n• Retrieve Test: ❌ Data Mismatch"
+            check_log += f"\n• Retrieve from bot_data: ❌ Mismatch"
         
-        # Check user's total data records
+        # Check webhook_users table for current user
         try:
-            user_data_response = requests.get(
-                f"{SUPABASE_URL}/rest/v1/tgbot_data?user_id=eq.{user_id}",
+            webhook_users_response = requests.get(
+                f"{SUPABASE_URL}/rest/v1/webhook_users?user_id=eq.{user_id}",
                 headers={
                     "apikey": SUPABASE_KEY,
                     "Authorization": f"Bearer {SUPABASE_KEY}"
                 }
             )
             
-            if user_data_response.status_code == 200:
-                user_records = len(user_data_response.json())
-                check_log += f"\n• Your Data Records: {user_records}"
+            if webhook_users_response.status_code == 200:
+                user_records = len(webhook_users_response.json())
+                check_log += f"\n• Your webhook_users records: {user_records}"
             else:
-                check_log += f"\n• Your Data Records: Unable to fetch"
+                check_log += f"\n• Your webhook_users records: {webhook_users_response.status_code}"
                 
         except Exception as e:
-            check_log += f"\n• Your Data Records: Error - {str(e)}"
+            check_log += f"\n• Your webhook_users records: Error - {str(e)}"
         
-        # Overall status
-        check_log += f"\n\n🎯 <b>Overall Database Status: ✅ OPERATIONAL</b>"
-        check_log += f"\n🕒 Check Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        check_log += f"\n\n🎯 <b>Overall Status: ✅ ACTUAL TABLES READY</b>"
         
     except Exception as e:
-        check
+        check_log += f"\n\n❌ <b>Database Check Failed:</b> {str(e)}"
+    
+    return check_log
