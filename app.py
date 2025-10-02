@@ -23,7 +23,7 @@ bot_data = {}
 command_handlers = {}
 next_command_handlers = {}
 command_queue = {}
-module_cache = {}  # Cache loaded modules
+module_cache = {}
 
 class Bot:
     @staticmethod
@@ -33,12 +33,8 @@ class Bot:
             logger.info(f"🚀 Executing immediate command: {command_name}")
             
             if command_name in command_handlers:
-                handler_func = command_handlers[command_name]
-                if callable(handler_func):
-                    result = handler_func(user_info, chat_id, message_text)
-                else:
-                    # If it's a module, execute the main function
-                    result = handler_func['execute'](user_info, chat_id, message_text, command_name)
+                handler_data = command_handlers[command_name]
+                result = handler_data['execute'](user_info, chat_id, message_text, command_name)
                 logger.info(f"✅ Command {command_name} executed successfully")
                 return result
             else:
@@ -64,7 +60,6 @@ class Bot:
             'chat_id': chat_id
         }
         
-        # Return current response + waiting message
         if current_response:
             return current_response + f"\n\n🔄 Waiting for your input to continue with <b>/{command_name}</b>..."
         else:
@@ -103,132 +98,41 @@ class Bot:
                 except Exception as e:
                     results.append(f"❌ Error in queued command {queued['command']}: {str(e)}")
             
-            # Clear the queue
             command_queue[user_id] = []
-            
             return "\n\n".join(results)
         return None
 
-    @staticmethod
-    def save_data(variable, value):
-        """Save data for all users (bot-wide)"""
-        try:
-            response = requests.post(
-                f"{SUPABASE_URL}/rest/v1/bot_data",
-                headers={
-                    "apikey": SUPABASE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_KEY}",
-                    "Content-Type": "application/json",
-                    "Prefer": "return=minimal"
-                },
-                json={
-                    "variable": variable,
-                    "value": value,
-                    "created_at": datetime.now().isoformat()
-                }
-            )
-            bot_data[variable] = value
-            return f"✅ Bot data saved: {variable} = {value}"
-        except Exception as e:
-            logger.error(f"Error saving bot data: {e}")
-            return f"❌ Error saving bot data: {str(e)}"
-
-class User:
-    @staticmethod
-    def save_data(user_id, variable, value):
-        """Save data for specific user using new table structure"""
-        try:
-            # First, ensure user exists in tgbot_users
-            user_response = requests.post(
-                f"{SUPABASE_URL}/rest/v1/tgbot_users",
-                headers={
-                    "apikey": SUPABASE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_KEY}",
-                    "Content-Type": "application/json",
-                    "Prefer": "resolution=merge-duplicates"
-                },
-                json={
-                    "user_id": user_id,
-                    "updated_at": datetime.now().isoformat()
-                }
-            )
-            
-            # Now save/update data in tgbot_data
-            response = requests.post(
-                f"{SUPABASE_URL}/rest/v1/tgbot_data",
-                headers={
-                    "apikey": SUPABASE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_KEY}",
-                    "Content-Type": "application/json", 
-                    "Prefer": "resolution=merge-duplicates"
-                },
-                json={
-                    "user_id": user_id,
-                    "variable": variable,
-                    "value": value,
-                    "updated_at": datetime.now().isoformat()
-                }
-            )
-            
-            if response.status_code in [200, 201, 204]:
-                # Update local cache
-                if user_id not in user_sessions:
-                    user_sessions[user_id] = {}
-                user_sessions[user_id][variable] = value
-                return f"✅ Data saved: {variable}"
-            else:
-                return f"❌ Save failed: {response.status_code}"
-                
-        except Exception as e:
-            logger.error(f"Error saving user data: {e}")
-            return f"❌ Error: {str(e)}"
-
-    @staticmethod
-    def get_data(user_id, variable):
-        """Get data for specific user from new tables"""
-        try:
-            # Check local cache first
-            if user_id in user_sessions and variable in user_sessions[user_id]:
-                return user_sessions[user_id][variable]
-            
-            # Fetch from Supabase
-            response = requests.get(
-                f"{SUPABASE_URL}/rest/v1/tgbot_data?user_id=eq.{user_id}&variable=eq.{variable}",
-                headers={
-                    "apikey": SUPABASE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_KEY}"
-                }
-            )
-            
-            if response.status_code == 200 and response.json():
-                value = response.json()[0].get('value')
-                # Update local cache
-                if user_id not in user_sessions:
-                    user_sessions[user_id] = {}
-                user_sessions[user_id][variable] = value
-                return value
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error getting user data: {e}")
-            return None
-
 def execute_module_function(module, user_info, chat_id, message_text, command_name):
-    """Execute the main function from a module"""
+    """Execute the appropriate function from a module based on command name"""
     try:
-        # Try to find and execute main function
-        if hasattr(module, 'main'):
+        # Try to find specific function for this command
+        function_name = f"handle_{command_name}"
+        if hasattr(module, function_name):
+            return getattr(module, function_name)(user_info, chat_id, message_text)
+        
+        # Try main function
+        elif hasattr(module, 'main'):
             return module.main(user_info, chat_id, message_text, command_name)
+        
+        # Try execute function
         elif hasattr(module, 'execute'):
             return module.execute(user_info, chat_id, message_text, command_name)
+        
         else:
-            # If no main function, try to execute the module directly
-            return f"❌ Module {module.__name__} has no executable function"
+            # If no specific function, check for any handle_ function
+            for attr_name in dir(module):
+                if attr_name.startswith('handle_'):
+                    func = getattr(module, attr_name)
+                    if callable(func):
+                        return func(user_info, chat_id, message_text)
+            
+            return f"❌ No executable function found for command: {command_name}"
+            
     except Exception as e:
-        return f"❌ Error executing module: {str(e)}"
+        return f"❌ Error executing command {command_name}: {str(e)}"
 
 def auto_discover_handlers():
-    """Automatically discover all handler modules - NEW SYSTEM"""
+    """Automatically discover all handler modules - FIXED VERSION"""
     handlers = {}
     
     try:
@@ -300,7 +204,6 @@ logger.info(f"📋 Available commands: {list(command_handlers.keys())}")
 @app.route('/', methods=['GET', 'POST', 'HEAD'])
 def handle_request():
     try:
-        # Get token from URL parameter or environment variable
         token = request.args.get('token') or os.environ.get('BOT_TOKEN')
         
         if request.method == 'HEAD':
@@ -314,11 +217,9 @@ def handle_request():
 
         if request.method == 'GET':
             return jsonify({
-                'status': '✅ Bot is running with MODULE-BASED COMMAND SYSTEM',
+                'status': '✅ Bot is running with FIXED COMMAND SYSTEM',
                 'available_commands': list(command_handlers.keys()),
                 'total_commands': len(command_handlers),
-                'active_sessions': len(next_command_handlers),
-                'queued_commands': sum(len(q) for q in command_queue.values()),
                 'timestamp': datetime.now().isoformat()
             })
 
@@ -336,7 +237,7 @@ def handle_request():
                 
                 logger.info(f"📩 Message from {user_info.get('first_name')}: {message_text}")
                 
-                # Check for next command handler first (paused execution)
+                # Check for next command handler first
                 if user_id in next_command_handlers:
                     next_command_data = next_command_handlers.pop(user_id)
                     command_name = next_command_data['command']
@@ -350,12 +251,6 @@ def handle_request():
                             message_text,
                             command_name
                         )
-                        
-                        # Process any queued commands after resuming
-                        queued_result = Bot.processQueuedCommands(user_id, chat_id)
-                        if queued_result:
-                            response_text += f"\n\n{queued_result}"
-                            
                         return jsonify(send_telegram_message(chat_id, response_text))
                 
                 # Process queued commands if any
@@ -367,7 +262,7 @@ def handle_request():
                 for command, handler_data in command_handlers.items():
                     if message_text.startswith(command):
                         try:
-                            response_text = handler_data['execute'](user_info, chat_id, message_text, command)
+                            response_text = handler_data['execute'](user_info, chat_id, message_text, command[1:])  # Remove leading /
                             return jsonify(send_telegram_message(chat_id, response_text))
                         except Exception as e:
                             error_msg = f"❌ Error executing command: {str(e)}"
@@ -395,17 +290,6 @@ def handle_request():
     except Exception as e:
         logger.error(f'❌ Error: {e}')
         return jsonify({'error': 'Processing failed'}), 500
-
-@app.route('/health')
-def health_check():
-    return jsonify({
-        'status': 'healthy', 
-        'total_commands': len(command_handlers),
-        'commands': list(command_handlers.keys()),
-        'active_sessions': len(next_command_handlers),
-        'queued_commands': sum(len(q) for q in command_queue.values()),
-        'timestamp': datetime.now().isoformat()
-    }), 200
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
