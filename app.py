@@ -6,6 +6,7 @@ import importlib
 import sys
 from datetime import datetime
 import uuid
+import asyncio
 
 # Add current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -66,7 +67,7 @@ class SupabaseClient:
         self.base_url = SUPABASE_URL
         self.api_key = SUPABASE_KEY
 
-    async def execute_sql(self, sql):
+    def execute_sql(self, sql):
         """Execute SQL via Supabase RPC"""
         try:
             response = requests.post(
@@ -87,7 +88,7 @@ class SupabaseClient:
             logger.error(f"Supabase execute_sql error: {e}")
             return None
 
-    async def create_user_notes_tables(self):
+    def create_user_notes_tables(self):
         """Create tables for user notes system"""
         sql = """
         CREATE TABLE IF NOT EXISTS user_notes (
@@ -118,15 +119,14 @@ class SupabaseClient:
             created_at TIMESTAMPTZ DEFAULT NOW()
         );
         """
-        return await self.execute_sql(sql)
+        return self.execute_sql(sql)
 
-    async def save_note(self, user_id, username, title, content, category='general'):
+    def save_note(self, user_id, username, title, content, category='general'):
         """Save a new note"""
         try:
             note_id = generate_id(8)
             response = requests.post(
                 f"{self.base_url}/rest/v1/user_notes",
-                method='POST',
                 headers={
                     'apikey': self.api_key,
                     'Content-Type': 'application/json',
@@ -155,7 +155,7 @@ class SupabaseClient:
             logger.error(f"Error saving note: {e}")
             return None
 
-    async def get_user_notes(self, user_id, page=1, limit=10, category=None):
+    def get_user_notes(self, user_id, page=1, limit=10, category=None):
         """Get user notes with pagination"""
         try:
             url = f"{self.base_url}/rest/v1/user_notes?user_id=eq.{user_id}&order=created_at.desc&limit={limit}&offset={(page-1)*limit}"
@@ -180,7 +180,7 @@ class SupabaseClient:
             logger.error(f"Error getting notes: {e}")
             return []
 
-    async def get_note_by_id(self, note_id):
+    def get_note_by_id(self, note_id):
         """Get specific note by ID"""
         try:
             response = requests.get(
@@ -201,7 +201,7 @@ class SupabaseClient:
             logger.error(f"Error getting note: {e}")
             return None
 
-    async def delete_note(self, note_id, user_id):
+    def delete_note(self, note_id, user_id):
         """Delete a note"""
         try:
             response = requests.delete(
@@ -218,7 +218,7 @@ class SupabaseClient:
             logger.error(f"Error deleting note: {e}")
             return False
 
-    async def update_note(self, note_id, user_id, title=None, content=None, category=None):
+    def update_note(self, note_id, user_id, title=None, content=None, category=None):
         """Update a note"""
         try:
             update_data = {'updated_at': datetime.now().isoformat()}
@@ -242,7 +242,7 @@ class SupabaseClient:
             logger.error(f"Error updating note: {e}")
             return False
 
-    async def get_categories(self, user_id):
+    def get_categories(self, user_id):
         """Get user's categories"""
         try:
             response = requests.get(
@@ -262,7 +262,7 @@ class SupabaseClient:
             logger.error(f"Error getting categories: {e}")
             return []
 
-    async def create_category(self, user_id, category_name, color='#000000'):
+    def create_category(self, user_id, category_name, color='#000000'):
         """Create a new category"""
         try:
             category_id = generate_id(6)
@@ -390,15 +390,21 @@ command_handlers = auto_discover_handlers()
 logger.info(f"🎯 Total commands loaded: {len(command_handlers)}")
 logger.info(f"📋 Available commands: {list(command_handlers.keys())}")
 
-# Create tables on startup
-@app.before_first_request
+# Setup tables on application startup
 def setup_tables():
+    """Setup database tables when app starts"""
     try:
-        import asyncio
-        asyncio.run(supabase.create_user_notes_tables())
-        logger.info("✅ User notes tables setup completed")
+        logger.info("🔄 Setting up database tables...")
+        result = supabase.create_user_notes_tables()
+        if result:
+            logger.info("✅ User notes tables setup completed")
+        else:
+            logger.warning("⚠️ Table setup may have failed - check Supabase connection")
     except Exception as e:
         logger.error(f"❌ Table setup error: {e}")
+
+# Call table setup when module loads
+setup_tables()
 
 @app.route('/', methods=['GET', 'POST', 'HEAD'])
 def handle_request():
@@ -462,15 +468,15 @@ def handle_request():
                             return jsonify(send_telegram_message(chat_id, error_msg))
                 
                 # Default response for unknown commands
-                available_commands = "\n".join([f"• <code>{cmd}</code>" for cmd in command_handlers.keys()])
+                available_commands = "\n".join([f"• <b>{cmd}</b>" for cmd in command_handlers.keys()])
                 if available_commands:
                     response_text = f"""
-❌ <b>Unknown Command:</b> <code>{message_text}</code>
+❌ <b>Unknown Command:</b> <b>{message_text}</b>
 
 📋 <b>Available Commands:</b>
 {available_commands}
 
-💡 <b>Help:</b> <code>/help</code>
+💡 <b>Help:</b> <b>/help</b>
 """
                 else:
                     response_text = "❌ <b>No commands loaded!</b> Check server logs."
