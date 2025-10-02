@@ -1,41 +1,82 @@
 from datetime import datetime
+from app import Bot, User
 
-def show_data_function(user_info, chat_id, message_text):
-    """Handle /show, /display, /view commands - SAME FILE"""
+def main(user_info, chat_id, message_text, command_name):
+    """Main function for show/display/view commands"""
     
+    if command_name == "show":
+        return handle_show(user_info, chat_id, message_text)
+    elif command_name == "display":
+        return handle_display(user_info, chat_id, message_text)
+    elif command_name == "view":
+        return handle_view(user_info, chat_id, message_text)
+    else:
+        return "❌ Unknown command"
+
+def handle_show(user_info, chat_id, message_text):
+    """Handle /show command"""
     user_id = user_info.get('id')
     first_name = user_info.get('first_name', 'User')
-    command_used = message_text.split()[0] if message_text else "/show"
     
-    response_text = f"""
-📂 <b>Data Display System</b>
+    saved_data = User.get_data(user_id, "saved_data")
+    stored_data = User.get_data(user_id, "stored_data")
+    kept_data = User.get_data(user_id, "kept_data")
+    
+    result = f"""
+📂 <b>Show Data</b> (via /show)
 
-🔧 <b>Command Details:</b>
-• File: show,display,view.py
-• Function: show_data_function()
-• Command Used: <code>{command_used}</code>
+👤 <b>User:</b> {first_name}
+📅 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-👤 <b>User Info:</b>
-• Name: {first_name}
-• ID: <code>{user_id}</code>
-• Time: {datetime.now().strftime('%H:%M:%S')}
+💾 <b>Saved Data:</b>
+<b>{saved_data if saved_data else 'No data saved'}</b>
 
-📊 <b>Your Saved Data:</b>
-• Item 1: Sample data 1
-• Item 2: Sample data 2
-• Item 3: Sample data 3
+🏪 <b>Stored Data:</b>
+<b>{stored_data if stored_data else 'No data stored'}</b>
 
-🎯 <b>Equivalent Commands:</b>
-• <code>/show</code> - Display data
-• <code>/display</code> - Display data
-• <code>/view</code> - Display data
+🔒 <b>Kept Data:</b>
+<b>{kept_data if kept_data else 'No data kept'}</b>
 
-💡 <b>System Working:</b>
-✅ Multiple commands, single file
-✅ Same function handles all commands
-✅ File: show,display,view.py
-
-🚀 <b>All display commands work identically!</b>
+💡 <b>Save data using:</b>
+• <b>/save data</b>
+• <b>/store data</b> 
+• <b>/keep data</b>
 """
     
-    return response_text
+    return result
+
+def handle_display(user_info, chat_id, message_text):
+    """Handle /display command"""
+    user_id = user_info.get('id')
+    first_name = user_info.get('first_name', 'User')
+    
+    saved_data = User.get_data(user_id, "saved_data")
+    
+    return f"""
+🖥️ <b>Display Data</b> (via /display)
+
+👤 <b>User:</b> {first_name}
+📊 <b>Data Preview:</b>
+
+<b>{saved_data if saved_data else 'No data to display'}</b>
+
+🔧 <b>Same data as /show but different presentation!</b>
+"""
+
+def handle_view(user_info, chat_id, message_text):
+    """Handle /view command"""
+    user_id = user_info.get('id')
+    first_name = user_info.get('first_name', 'User')
+    
+    stored_data = User.get_data(user_id, "stored_data")
+    
+    return f"""
+👀 <b>View Data</b> (via /view)
+
+👤 <b>User:</b> {first_name}
+📋 <b>Stored Data:</b>
+
+<b>{stored_data if stored_data else 'No data to view'}</b>
+
+🎯 <b>Another way to view your data from the same module!</b>
+"""

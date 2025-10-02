@@ -1,60 +1,122 @@
 from datetime import datetime
 import json
+from app import Bot, User
 
-def data_save_function(user_info, chat_id, message_text):
-    """Handle /save, /store, /keep commands - SAME FILE"""
+def main(user_info, chat_id, message_text, command_name):
+    """Main function for save/store/keep commands"""
     
+    if command_name == "save":
+        return handle_save(user_info, chat_id, message_text)
+    elif command_name == "store":
+        return handle_store(user_info, chat_id, message_text)
+    elif command_name == "keep":
+        return handle_keep(user_info, chat_id, message_text)
+    else:
+        return "❌ Unknown command"
+
+def handle_save(user_info, chat_id, message_text):
+    """Handle /save command"""
     user_id = user_info.get('id')
     first_name = user_info.get('first_name', 'User')
-    command_used = message_text.split()[0] if message_text else "/save"
     
-    # Extract data after command
-    save_data = message_text[len(command_used):].strip()
+    # Extract data after /save command
+    save_data = message_text[6:].strip() if len(message_text) > 6 else ""
     
     if not save_data:
-        return f"""
-💾 <b>Data Save System</b>
+        return """
+💾 <b>Save Data</b> (via /save)
 
-🔧 <b>Command Details:</b>
-• File: save,store,keep.py
-• Function: data_save_function()
-• Command Used: <code>{command_used}</code>
-
-📝 <b>Usage:</b>
-<code>{command_used} your_data_here</code>
+📝 <b>Usage:</b> 
+<b>/save your_data_here</b>
 
 💡 <b>Examples:</b>
-• <code>{command_used} My important note</code>
-• <code>{command_used} Phone: 01712345678</code>
+• <b>/save My important note</b>
+• <b>/save Phone: 01712345678</b>
 
-🎯 <b>Equivalent Commands:</b>
-• <code>/save</code> - Save data
-• <code>/store</code> - Save data  
-• <code>/keep</code> - Save data
-
-✅ <b>All three commands work identically!</b>
+🔧 <b>Related commands:</b>
+• <b>/store</b> - Alternative save
+• <b>/keep</b> - Another variant
 """
     
-    # Simulate saving data
-    result = f"""
-✅ <b>Data Saved Successfully!</b>
-
-🔧 <b>System Info:</b>
-• File: save,store,keep.py
-• Function: data_save_function()
-• Command Used: <code>{command_used}</code>
+    # Save the data
+    result = User.save_data(user_id, "saved_data", save_data)
+    
+    return f"""
+✅ <b>Data Saved</b> (via /save)
 
 👤 <b>User:</b> {first_name}
-📝 <b>Data Saved:</b>
-<code>{save_data}</code>
-🕒 <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
+📅 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+📝 <b>Data:</b> <b>{save_data}</b>
 
-💡 <b>Try these equivalent commands:</b>
-• <code>/save data</code>
-• <code>/store data</code>
-• <code>/keep data</code>
+💾 <b>Status:</b> {result}
+"""
 
-🎯 <b>All commands save data the same way!</b>
+def handle_store(user_info, chat_id, message_text):
+    """Handle /store command"""
+    user_id = user_info.get('id')
+    first_name = user_info.get('first_name', 'User')
+    
+    # Extract data after /store command
+    store_data = message_text[7:].strip() if len(message_text) > 7 else ""
+    
+    if not store_data:
+        return """
+🏪 <b>Store Data</b> (via /store)
+
+📝 <b>Usage:</b> 
+<b>/store your_data_here</b>
+
+💡 <b>Examples:</b>
+• <b>/store My secret info</b>
+• <b>/store Email: user@example.com</b>
+
+🔧 <b>Same functionality as /save but different command!</b>
 """
     
-    return result
+    # Store the data
+    result = User.save_data(user_id, "stored_data", store_data)
+    
+    return f"""
+🏪 <b>Data Stored</b> (via /store)
+
+👤 <b>User:</b> {first_name}
+📅 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+📦 <b>Data:</b> <b>{store_data}</b>
+
+💾 <b>Status:</b> {result}
+"""
+
+def handle_keep(user_info, chat_id, message_text):
+    """Handle /keep command"""
+    user_id = user_info.get('id')
+    first_name = user_info.get('first_name', 'User')
+    
+    # Extract data after /keep command
+    keep_data = message_text[6:].strip() if len(message_text) > 6 else ""
+    
+    if not keep_data:
+        return """
+🔒 <b>Keep Data</b> (via /keep)
+
+📝 <b>Usage:</b> 
+<b>/keep your_data_here</b>
+
+💡 <b>Examples:</b>
+• <b>/keep Important reminder</b>
+• <b>/keep Password: 123456</b>
+
+🔧 <b>Another variant of save command from same file!</b>
+"""
+    
+    # Keep the data
+    result = User.save_data(user_id, "kept_data", keep_data)
+    
+    return f"""
+🔒 <b>Data Kept</b> (via /keep)
+
+👤 <b>User:</b> {first_name}
+📅 <b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+🗃️ <b>Data:</b> <b>{keep_data}</b>
+
+💾 <b>Status:</b> {result}
+"""
