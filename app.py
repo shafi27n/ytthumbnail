@@ -11,6 +11,10 @@ import json
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
+import nest_asyncio
+
+# Apply nest_asyncio to allow nested event loops
+nest_asyncio.apply()
 
 # Add current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -184,14 +188,26 @@ class SupabaseClient:
 class TelegramAccountManager:
     def __init__(self):
         self.supabase = SupabaseClient()
+        self._loop = None
+    
+    def get_event_loop(self):
+        """Get or create event loop"""
+        try:
+            return asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            return loop
     
     async def create_client(self, session_string=None):
         """Create Telegram client with or without session"""
-        return TelegramClient(
+        client = TelegramClient(
             StringSession(session_string) if session_string else StringSession(),
             int(API_ID),
             API_HASH
         )
+        await client.connect()
+        return client
     
     async def login_with_phone(self, phone_number, user_info, chat_id):
         """Start login process with phone number"""
@@ -200,7 +216,6 @@ class TelegramAccountManager:
         
         try:
             client = await self.create_client()
-            await client.connect()
             
             # Send code request
             code_request = await client.send_code_request(phone_number)
@@ -232,6 +247,11 @@ After code, you'll be asked for password.
             
         except Exception as e:
             logger.error(f"Login error: {e}")
+            # Close client on error
+            try:
+                await client.disconnect()
+            except:
+                pass
             return f"❌ <b>Login failed:</b> {str(e)}"
     
     async def verify_code(self, login_id, code, user_info, chat_id):
@@ -275,7 +295,7 @@ After code, you'll be asked for password.
 🆔 <b>Username:</b> @{me.username or 'N/A'}
 🔐 <b>Session saved securely!</b>
 
-📊 <b>Manage accounts:</b> <code>/accounts</code>
+📊 <b>Manage accounts:</b> <b>/accounts</b>
 """
             
         except SessionPasswordNeededError:
@@ -295,6 +315,13 @@ This account has two-step verification.
             
         except Exception as e:
             logger.error(f"Verify error: {e}")
+            # Cleanup on error
+            try:
+                await client.disconnect()
+            except:
+                pass
+            if login_id in login_sessions:
+                del login_sessions[login_id]
             return f"❌ <b>Verification failed:</b> {str(e)}"
     
     async def verify_password(self, login_id, password, user_info, chat_id):
@@ -337,11 +364,18 @@ This account has two-step verification.
 📱 <b>Phone:</b> +{session_data['phone_number']}
 🆔 <b>Username:</b> @{me.username or 'N/A'}
 
-📊 <b>Manage accounts:</b> <code>/accounts</code>
+📊 <b>Manage accounts:</b> <b>/accounts</b>
 """
             
         except Exception as e:
             logger.error(f"Password error: {e}")
+            # Cleanup on error
+            try:
+                await client.disconnect()
+            except:
+                pass
+            if login_id in login_sessions:
+                del login_sessions[login_id]
             return f"❌ <b>Password verification failed:</b> {str(e)}"
     
     async def get_user_accounts(self, user_id):
@@ -352,7 +386,6 @@ This account has two-step verification.
         for session in sessions:
             try:
                 client = await self.create_client(session['session_string'])
-                await client.connect()
                 
                 me = await client.get_me()
                 accounts.append({
@@ -362,6 +395,9 @@ This account has two-step verification.
                     'session_id': session['id'],
                     'client': client
                 })
+                
+                # Close client after getting info
+                await client.disconnect()
                 
             except Exception as e:
                 logger.error(f"Error loading session {session['phone_number']}: {e}")
@@ -378,21 +414,31 @@ This account has two-step verification.
         
         try:
             client = await self.create_client(session['session_string'])
-            await client.connect()
             
             # Send message
             result = await client.send_message(target, message)
             
             await client.disconnect()
-            return True, f"✅ <b>Message sent via {phone_number}</b>"
+            return True, f"✅ <b>Message sent via {phone_number}</b>\n📩 To: {target}"
             
         except Exception as e:
             logger.error(f"Send message error: {e}")
+            # Cleanup on error
+            try:
+                await client.disconnect()
+            except:
+                pass
             return False, f"❌ <b>Failed to send:</b> {str(e)}"
 
 # Global instances
 supabase = SupabaseClient()
 telegram_manager = TelegramAccountManager()
+
+# Helper functions for async operations
+def run_async(coro):
+    """Run async coroutine in event loop"""
+    loop = telegram_manager.get_event_loop()
+    return loop.run_until_complete(coro)
 
 class Bot:
     @staticmethod
@@ -566,7 +612,7 @@ def handle_request():
                             return jsonify(send_telegram_message(chat_id, error_msg))
                 
                 # Default response for unknown commands
-                available_commands = "\n".join([f"• <code>{cmd}</code>" for cmd in command_handlers.keys()])
+                available_commands = "\n".join([f"• <b>{cmd}</b>" for cmd in command_handlers.keys()])
                 if available_commands:
                     response_text = f"""
 ❌ <b>Unknown Command:</b> <code>{message_text}</code>
@@ -574,7 +620,7 @@ def handle_request():
 📋 <b>Available Commands:</b>
 {available_commands}
 
-💡 <b>Help:</b> <code>/help</code>
+💡 <b>Help:</b> <b>/help</b>
 """
                 else:
                     response_text = "❌ <b>No commands loaded!</b> Check server logs."
@@ -597,7 +643,14 @@ def health_check():
         'timestamp': datetime.now().isoformat()
     }), 200
 
+# app.py এর শেষে এই অংশটি যোগ করুন:
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     logger.info(f"🚀 Starting Telegram Account Manager on port {port}")
-    app.run(host='0.0.0.0', port=port, debug=False)
+    
+    # Development mode - use Flask built-in server
+    if os.environ.get('ENV') == 'development':
+        app.run(host='0.0.0.0', port=port, debug=False)
+    else:
+        # Production - will be run by Gunicorn
+        logger.info("🏭 Production mode - Ready for Gunicorn")

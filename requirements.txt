@@ -1,5 +1,5 @@
-#python==3.11.8
 Flask==2.3.3
 requests==2.31.0
-gunicorn==21.2.0
 telethon==1.28.5
+nest-asyncio==1.5.8
+gunicorn==21.2.0
