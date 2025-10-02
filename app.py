@@ -8,6 +8,9 @@ from datetime import datetime
 import uuid
 import asyncio
 import json
+from telethon import TelegramClient
+from telethon.sessions import StringSession
+from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
 
 # Add current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -20,34 +23,16 @@ logger = logging.getLogger(__name__)
 SUPABASE_URL = 'https://megohojyelqspypejlpo.supabase.co'
 SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1lZ29ob2p5ZWxxc3B5cGVqbHBvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTIzMjQxMDAsImV4cCI6MjA2NzkwMDEwMH0.d3qS8Z0ihWXubYp7kYLsGc0qEpDC1iOdxK9QdfozXWo'
 
-# Telegram API Configuration - MUST SET THESE IN RENDER ENVIRONMENT VARIABLES
+# Telegram API Configuration
 API_ID = os.environ.get('API_ID', '25895655')
 API_HASH = os.environ.get('API_HASH', 'aa3c6f659f045adce290ffce23618b63')
-
-if not API_ID or not API_HASH:
-    logger.error("❌ API_ID and API_HASH must be set as environment variables")
-    # Set dummy values to avoid import errors
-    API_ID = '123'
-    API_HASH = 'abc'
-
-# Try to import telethon only if API credentials are available
-try:
-    if API_ID and API_HASH and API_ID != '123':
-        from telethon import TelegramClient
-        from telethon.sessions import StringSession
-        from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
-        TELETHON_AVAILABLE = True
-    else:
-        TELETHON_AVAILABLE = False
-except ImportError as e:
-    logger.error(f"❌ Telethon import error: {e}")
-    TELETHON_AVAILABLE = False
 
 # Global storage
 user_sessions = {}
 bot_data = {}
 command_handlers = {}
 next_command_handlers = {}
+telegram_clients = {}
 login_sessions = {}
 
 def generate_id(length=8):
@@ -202,9 +187,6 @@ class TelegramAccountManager:
     
     async def create_client(self, session_string=None):
         """Create Telegram client with or without session"""
-        if not TELETHON_AVAILABLE:
-            raise ImportError("Telethon is not available. Check API credentials.")
-        
         return TelegramClient(
             StringSession(session_string) if session_string else StringSession(),
             int(API_ID),
@@ -213,9 +195,6 @@ class TelegramAccountManager:
     
     async def login_with_phone(self, phone_number, user_info, chat_id):
         """Start login process with phone number"""
-        if not TELETHON_AVAILABLE:
-            return "❌ <b>Telegram features disabled!</b> API credentials not configured."
-        
         user_id = user_info.get('id')
         login_id = generate_id(6)
         
@@ -257,9 +236,6 @@ After code, you'll be asked for password.
     
     async def verify_code(self, login_id, code, user_info, chat_id):
         """Verify login code"""
-        if not TELETHON_AVAILABLE:
-            return "❌ <b>Telegram features disabled!</b> API credentials not configured."
-            
         if login_id not in login_sessions:
             return "❌ <b>Invalid login session!</b> Please start login again."
         
@@ -323,9 +299,6 @@ This account has two-step verification.
     
     async def verify_password(self, login_id, password, user_info, chat_id):
         """Verify 2FA password"""
-        if not TELETHON_AVAILABLE:
-            return "❌ <b>Telegram features disabled!</b> API credentials not configured."
-            
         if login_id not in login_sessions:
             return "❌ <b>Invalid login session!</b>"
         
@@ -373,9 +346,6 @@ This account has two-step verification.
     
     async def get_user_accounts(self, user_id):
         """Get all logged in accounts for user"""
-        if not TELETHON_AVAILABLE:
-            return []
-            
         sessions = self.supabase.get_user_sessions(user_id)
         accounts = []
         
@@ -402,9 +372,6 @@ This account has two-step verification.
     
     async def send_message_via_account(self, user_id, phone_number, target, message):
         """Send message using specific account"""
-        if not TELETHON_AVAILABLE:
-            return False, "❌ <b>Telegram features disabled!</b> API credentials not configured."
-            
         session = self.supabase.get_session_by_phone(user_id, phone_number)
         if not session:
             return False, "❌ <b>Account not found!</b>"
@@ -552,19 +519,13 @@ def handle_request():
             }), 400
 
         if request.method == 'GET':
-            status_info = {
+            return jsonify({
                 'status': '✅ Telegram Account Manager is running',
                 'available_commands': list(command_handlers.keys()),
                 'total_commands': len(command_handlers),
                 'active_login_sessions': len(login_sessions),
-                'telethon_available': TELETHON_AVAILABLE,
                 'timestamp': datetime.now().isoformat()
-            }
-            
-            if not TELETHON_AVAILABLE:
-                status_info['warning'] = 'Telegram features disabled - set API_ID and API_HASH environment variables'
-            
-            return jsonify(status_info)
+            })
 
         if request.method == 'POST':
             update = request.get_json()
@@ -633,14 +594,10 @@ def health_check():
         'total_commands': len(command_handlers),
         'commands': list(command_handlers.keys()),
         'active_login_sessions': len(login_sessions),
-        'telethon_available': TELETHON_AVAILABLE,
         'timestamp': datetime.now().isoformat()
     }), 200
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
     logger.info(f"🚀 Starting Telegram Account Manager on port {port}")
-    logger.info(f"🔧 Telethon Available: {TELETHON_AVAILABLE}")
-    if not TELETHON_AVAILABLE:
-        logger.warning("⚠️ Telegram features disabled - set API_ID and API_HASH environment variables")
     app.run(host='0.0.0.0', port=port, debug=False)
