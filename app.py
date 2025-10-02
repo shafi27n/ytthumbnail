@@ -23,12 +23,9 @@ bot_data = {}
 command_handlers = {}
 next_command_handlers = {}
 command_queue = {}
+module_cache = {}  # Cache loaded modules
 
 class Bot:
-    # Class attributes to access global variables
-    next_command_handlers = next_command_handlers
-    command_queue = command_queue
-    
     @staticmethod
     def runCommand(command_name, user_info=None, chat_id=None, message_text=None):
         """Run a specific command immediately - continues execution"""
@@ -36,7 +33,12 @@ class Bot:
             logger.info(f"🚀 Executing immediate command: {command_name}")
             
             if command_name in command_handlers:
-                result = command_handlers[command_name](user_info, chat_id, message_text)
+                handler_func = command_handlers[command_name]
+                if callable(handler_func):
+                    result = handler_func(user_info, chat_id, message_text)
+                else:
+                    # If it's a module, execute the main function
+                    result = handler_func['execute'](user_info, chat_id, message_text, command_name)
                 logger.info(f"✅ Command {command_name} executed successfully")
                 return result
             else:
@@ -211,8 +213,22 @@ class User:
             logger.error(f"Error getting user data: {e}")
             return None
 
+def execute_module_function(module, user_info, chat_id, message_text, command_name):
+    """Execute the main function from a module"""
+    try:
+        # Try to find and execute main function
+        if hasattr(module, 'main'):
+            return module.main(user_info, chat_id, message_text, command_name)
+        elif hasattr(module, 'execute'):
+            return module.execute(user_info, chat_id, message_text, command_name)
+        else:
+            # If no main function, try to execute the module directly
+            return f"❌ Module {module.__name__} has no executable function"
+    except Exception as e:
+        return f"❌ Error executing module: {str(e)}"
+
 def auto_discover_handlers():
-    """Automatically discover all handler modules - MULTIPLE COMMANDS PER FILE"""
+    """Automatically discover all handler modules - NEW SYSTEM"""
     handlers = {}
     
     try:
@@ -238,23 +254,19 @@ def auto_discover_handlers():
                         module = importlib.util.module_from_spec(spec)
                         spec.loader.exec_module(module)
                         
-                        # Get ALL functions from the module (not just handle_ prefixed)
-                        function_names = [name for name in dir(module) 
-                                       if not name.startswith('_') and callable(getattr(module, name))]
+                        # Cache the module
+                        module_cache[module_name] = module
                         
-                        if function_names:
-                            # Use the first function found in the module
-                            first_function = function_names[0]
-                            handler_function = getattr(module, first_function)
-                            
-                            # Handle multiple commands from filename (name1,name2,name3.py)
-                            command_names = module_name.split(',')
-                            
-                            for command_name in command_names:
-                                handlers[f"/{command_name}"] = handler_function
-                                logger.info(f"✅ Auto-loaded command: /{command_name} -> {filename} -> {first_function}()")
-                        else:
-                            logger.warning(f"⚠️ No functions found in {module_name}")
+                        # Handle multiple commands from filename (name1,name2,name3.py)
+                        command_names = module_name.split(',')
+                        
+                        for command_name in command_names:
+                            # Register the module for this command
+                            handlers[f"/{command_name}"] = {
+                                'module': module,
+                                'execute': lambda u, c, m, cmd=command_name: execute_module_function(module, u, c, m, cmd)
+                            }
+                            logger.info(f"✅ Auto-loaded command: /{command_name} from module {module_name}")
                         
                     except Exception as e:
                         logger.error(f"❌ Error loading handler {module_name}: {e}")
@@ -302,7 +314,7 @@ def handle_request():
 
         if request.method == 'GET':
             return jsonify({
-                'status': '✅ Bot is running with MULTIPLE COMMANDS PER FILE SYSTEM',
+                'status': '✅ Bot is running with MODULE-BASED COMMAND SYSTEM',
                 'available_commands': list(command_handlers.keys()),
                 'total_commands': len(command_handlers),
                 'active_sessions': len(next_command_handlers),
@@ -331,10 +343,12 @@ def handle_request():
                     
                     if command_name in command_handlers:
                         logger.info(f"🔄 Resuming paused command: {command_name}")
-                        response_text = command_handlers[command_name](
+                        handler_data = command_handlers[command_name]
+                        response_text = handler_data['execute'](
                             next_command_data['user_info'], 
                             next_command_data['chat_id'], 
-                            message_text
+                            message_text,
+                            command_name
                         )
                         
                         # Process any queued commands after resuming
@@ -350,10 +364,10 @@ def handle_request():
                     return jsonify(send_telegram_message(chat_id, queued_result))
                 
                 # Handle regular commands
-                for command, handler in command_handlers.items():
+                for command, handler_data in command_handlers.items():
                     if message_text.startswith(command):
                         try:
-                            response_text = handler(user_info, chat_id, message_text)
+                            response_text = handler_data['execute'](user_info, chat_id, message_text, command)
                             return jsonify(send_telegram_message(chat_id, response_text))
                         except Exception as e:
                             error_msg = f"❌ Error executing command: {str(e)}"
