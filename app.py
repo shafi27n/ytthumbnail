@@ -7,6 +7,10 @@ import sys
 from datetime import datetime
 import uuid
 import asyncio
+import json
+from telethon import TelegramClient
+from telethon.sessions import StringSession
+from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError
 
 # Add current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -19,48 +23,21 @@ logger = logging.getLogger(__name__)
 SUPABASE_URL = 'https://megohojyelqspypejlpo.supabase.co'
 SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1lZ29ob2p5ZWxxc3B5cGVqbHBvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTIzMjQxMDAsImV4cCI6MjA2NzkwMDEwMH0.d3qS8Z0ihWXubYp7kYLsGc0qEpDC1iOdxK9QdfozXWo'
 
+# Telegram API Configuration
+API_ID = os.environ.get('API_ID', '25895655')
+API_HASH = os.environ.get('API_HASH', 'aa3c6f659f045adce290ffce23618b63')
+
 # Global storage
 user_sessions = {}
 bot_data = {}
 command_handlers = {}
 next_command_handlers = {}
+telegram_clients = {}
+login_sessions = {}
 
 def generate_id(length=8):
     """Generate unique ID"""
     return str(uuid.uuid4())[:length]
-
-class Bot:
-    @staticmethod
-    def runCommand(command_name, user_info=None, chat_id=None, message_text=None):
-        """Run a specific command immediately - continues to next command"""
-        try:
-            if command_name.startswith('/'):
-                command_name = command_name[1:]  # Remove leading slash
-            
-            if f"/{command_name}" in command_handlers:
-                handler = command_handlers[f"/{command_name}"]
-                return handler(user_info, chat_id, message_text or "")
-            else:
-                return f"❌ Command '{command_name}' not found"
-        except Exception as e:
-            logger.error(f"Error running command {command_name}: {e}")
-            return f"❌ Error executing command: {str(e)}"
-
-    @staticmethod
-    def handleNextCommand(command_name, user_info, chat_id):
-        """Set up next command handler for user response - waits for input"""
-        user_id = user_info.get('id')
-        
-        if command_name.startswith('/'):
-            command_name = command_name[1:]  # Remove leading slash
-            
-        next_command_handlers[user_id] = {
-            'command': command_name,
-            'timestamp': datetime.now().isoformat(),
-            'user_info': user_info,
-            'chat_id': chat_id
-        }
-        return f"🔄 Waiting for your input for command: {command_name}..."
 
 class SupabaseClient:
     def __init__(self):
@@ -88,45 +65,36 @@ class SupabaseClient:
             logger.error(f"Supabase execute_sql error: {e}")
             return None
 
-    def create_user_notes_tables(self):
-        """Create tables for user notes system"""
+    def create_telegram_sessions_table(self):
+        """Create tables for telegram sessions"""
         sql = """
-        CREATE TABLE IF NOT EXISTS user_notes (
+        CREATE TABLE IF NOT EXISTS telegram_sessions (
             id TEXT PRIMARY KEY,
             user_id BIGINT NOT NULL,
-            username TEXT,
-            title TEXT NOT NULL,
-            content TEXT NOT NULL,
-            category TEXT DEFAULT 'general',
-            is_pinned BOOLEAN DEFAULT FALSE,
+            phone_number TEXT NOT NULL,
+            session_string TEXT NOT NULL,
+            is_active BOOLEAN DEFAULT TRUE,
             created_at TIMESTAMPTZ DEFAULT NOW(),
-            updated_at TIMESTAMPTZ DEFAULT NOW()
+            last_used TIMESTAMPTZ DEFAULT NOW()
         );
         
-        CREATE TABLE IF NOT EXISTS note_categories (
+        CREATE TABLE IF NOT EXISTS telegram_accounts (
             id TEXT PRIMARY KEY,
             user_id BIGINT NOT NULL,
-            category_name TEXT NOT NULL,
-            color TEXT DEFAULT '#000000',
-            created_at TIMESTAMPTZ DEFAULT NOW(),
-            UNIQUE(user_id, category_name)
-        );
-        
-        CREATE TABLE IF NOT EXISTS note_tags (
-            id TEXT PRIMARY KEY,
-            note_id TEXT NOT NULL REFERENCES user_notes(id) ON DELETE CASCADE,
-            tag_name TEXT NOT NULL,
+            phone_number TEXT NOT NULL,
+            account_info JSONB,
+            is_primary BOOLEAN DEFAULT FALSE,
             created_at TIMESTAMPTZ DEFAULT NOW()
         );
         """
         return self.execute_sql(sql)
 
-    def save_note(self, user_id, username, title, content, category='general'):
-        """Save a new note"""
+    def save_telegram_session(self, user_id, phone_number, session_string):
+        """Save telegram session to database"""
         try:
-            note_id = generate_id(8)
+            session_id = generate_id(8)
             response = requests.post(
-                f"{self.base_url}/rest/v1/user_notes",
+                f"{self.base_url}/rest/v1/telegram_sessions",
                 headers={
                     'apikey': self.api_key,
                     'Content-Type': 'application/json',
@@ -134,36 +102,30 @@ class SupabaseClient:
                     'Prefer': 'return=representation'
                 },
                 json={
-                    'id': note_id,
+                    'id': session_id,
                     'user_id': user_id,
-                    'username': username,
-                    'title': title,
-                    'content': content,
-                    'category': category,
-                    'updated_at': datetime.now().isoformat()
+                    'phone_number': phone_number,
+                    'session_string': session_string,
+                    'last_used': datetime.now().isoformat()
                 }
             )
             
             if not response.ok:
-                logger.error(f"Save note error: {response.status} {response.text}")
+                logger.error(f"Save session error: {response.status} {response.text}")
                 return None
                 
             result = response.json()
-            return result[0] if result else {'id': note_id}
+            return result[0] if result else {'id': session_id}
             
         except Exception as e:
-            logger.error(f"Error saving note: {e}")
+            logger.error(f"Error saving session: {e}")
             return None
 
-    def get_user_notes(self, user_id, page=1, limit=10, category=None):
-        """Get user notes with pagination"""
+    def get_user_sessions(self, user_id):
+        """Get all sessions for a user"""
         try:
-            url = f"{self.base_url}/rest/v1/user_notes?user_id=eq.{user_id}&order=created_at.desc&limit={limit}&offset={(page-1)*limit}"
-            if category and category != 'all':
-                url += f"&category=eq.{category}"
-                
             response = requests.get(
-                url,
+                f"{self.base_url}/rest/v1/telegram_sessions?user_id=eq.{user_id}&is_active=eq.true",
                 headers={
                     'apikey': self.api_key,
                     'Authorization': f'Bearer {self.api_key}'
@@ -171,20 +133,19 @@ class SupabaseClient:
             )
             
             if not response.ok:
-                logger.error(f"Get notes error: {response.status} {response.text}")
                 return []
                 
             return response.json()
             
         except Exception as e:
-            logger.error(f"Error getting notes: {e}")
+            logger.error(f"Error getting sessions: {e}")
             return []
 
-    def get_note_by_id(self, note_id):
-        """Get specific note by ID"""
+    def get_session_by_phone(self, user_id, phone_number):
+        """Get specific session by phone number"""
         try:
             response = requests.get(
-                f"{self.base_url}/rest/v1/user_notes?id=eq.{note_id}",
+                f"{self.base_url}/rest/v1/telegram_sessions?user_id=eq.{user_id}&phone_number=eq.{phone_number}&is_active=eq.true",
                 headers={
                     'apikey': self.api_key,
                     'Authorization': f'Bearer {self.api_key}'
@@ -198,137 +159,276 @@ class SupabaseClient:
             return result[0] if result else None
             
         except Exception as e:
-            logger.error(f"Error getting note: {e}")
+            logger.error(f"Error getting session: {e}")
             return None
 
-    def delete_note(self, note_id, user_id):
-        """Delete a note"""
+    def deactivate_session(self, session_id, user_id):
+        """Deactivate a session"""
         try:
-            response = requests.delete(
-                f"{self.base_url}/rest/v1/user_notes?id=eq.{note_id}&user_id=eq.{user_id}",
-                headers={
-                    'apikey': self.api_key,
-                    'Authorization': f'Bearer {self.api_key}'
-                }
-            )
-            
-            return response.ok
-            
-        except Exception as e:
-            logger.error(f"Error deleting note: {e}")
-            return False
-
-    def update_note(self, note_id, user_id, title=None, content=None, category=None):
-        """Update a note"""
-        try:
-            update_data = {'updated_at': datetime.now().isoformat()}
-            if title: update_data['title'] = title
-            if content: update_data['content'] = content
-            if category: update_data['category'] = category
-            
             response = requests.patch(
-                f"{self.base_url}/rest/v1/user_notes?id=eq.{note_id}&user_id=eq.{user_id}",
+                f"{self.base_url}/rest/v1/telegram_sessions?id=eq.{session_id}&user_id=eq.{user_id}",
                 headers={
                     'apikey': self.api_key,
                     'Content-Type': 'application/json',
                     'Authorization': f'Bearer {self.api_key}'
                 },
-                json=update_data
+                json={'is_active': False}
             )
             
             return response.ok
             
         except Exception as e:
-            logger.error(f"Error updating note: {e}")
+            logger.error(f"Error deactivating session: {e}")
             return False
 
-    def get_categories(self, user_id):
-        """Get user's categories"""
+class TelegramAccountManager:
+    def __init__(self):
+        self.supabase = SupabaseClient()
+    
+    async def create_client(self, session_string=None):
+        """Create Telegram client with or without session"""
+        return TelegramClient(
+            StringSession(session_string) if session_string else StringSession(),
+            int(API_ID),
+            API_HASH
+        )
+    
+    async def login_with_phone(self, phone_number, user_info, chat_id):
+        """Start login process with phone number"""
+        user_id = user_info.get('id')
+        login_id = generate_id(6)
+        
         try:
-            response = requests.get(
-                f"{self.base_url}/rest/v1/note_categories?user_id=eq.{user_id}",
-                headers={
-                    'apikey': self.api_key,
-                    'Authorization': f'Bearer {self.api_key}'
-                }
+            client = await self.create_client()
+            await client.connect()
+            
+            # Send code request
+            code_request = await client.send_code_request(phone_number)
+            phone_code_hash = code_request.phone_code_hash
+            
+            # Store login session
+            login_sessions[login_id] = {
+                'client': client,
+                'phone_number': phone_number,
+                'phone_code_hash': phone_code_hash,
+                'user_info': user_info,
+                'chat_id': chat_id,
+                'created_at': datetime.now()
+            }
+            
+            return f"""
+📱 <b>Telegram Login Started</b>
+
+✅ <b>Code sent to:</b> +{phone_number}
+
+🔢 <b>Please enter the verification code:</b>
+<code>/verify {login_id} 123456</code>
+
+💡 <b>Format:</b> <code>/verify login_id code</code>
+
+⚠️ <b>If you have 2FA password:</b>
+After code, you'll be asked for password.
+"""
+            
+        except Exception as e:
+            logger.error(f"Login error: {e}")
+            return f"❌ <b>Login failed:</b> {str(e)}"
+    
+    async def verify_code(self, login_id, code, user_info, chat_id):
+        """Verify login code"""
+        if login_id not in login_sessions:
+            return "❌ <b>Invalid login session!</b> Please start login again."
+        
+        session_data = login_sessions[login_id]
+        client = session_data['client']
+        
+        try:
+            # Complete sign in
+            await client.sign_in(
+                session_data['phone_number'],
+                code,
+                phone_code_hash=session_data['phone_code_hash']
             )
             
-            if not response.ok:
-                return []
+            # Get session string
+            session_string = client.session.save()
+            
+            # Save to database
+            self.supabase.save_telegram_session(
+                user_info.get('id'),
+                session_data['phone_number'],
+                session_string
+            )
+            
+            # Get account info
+            me = await client.get_me()
+            
+            # Cleanup
+            await client.disconnect()
+            del login_sessions[login_id]
+            
+            return f"""
+✅ <b>Login Successful!</b>
+
+👤 <b>Account:</b> {me.first_name} {me.last_name or ''}
+📱 <b>Phone:</b> +{session_data['phone_number']}
+🆔 <b>Username:</b> @{me.username or 'N/A'}
+🔐 <b>Session saved securely!</b>
+
+📊 <b>Manage accounts:</b> <code>/accounts</code>
+"""
+            
+        except SessionPasswordNeededError:
+            # Store for password
+            login_sessions[login_id]['needs_password'] = True
+            return """
+🔐 <b>2FA Password Required</b>
+
+This account has two-step verification.
+
+🔢 <b>Please enter your password:</b>
+<code>/password {login_id} your_password</code>
+"""
+            
+        except PhoneCodeInvalidError:
+            return "❌ <b>Invalid code!</b> Please check and try again."
+            
+        except Exception as e:
+            logger.error(f"Verify error: {e}")
+            return f"❌ <b>Verification failed:</b> {str(e)}"
+    
+    async def verify_password(self, login_id, password, user_info, chat_id):
+        """Verify 2FA password"""
+        if login_id not in login_sessions:
+            return "❌ <b>Invalid login session!</b>"
+        
+        session_data = login_sessions[login_id]
+        if not session_data.get('needs_password'):
+            return "❌ <b>Password not required!</b>"
+        
+        client = session_data['client']
+        
+        try:
+            await client.sign_in(password=password)
+            
+            # Get session string
+            session_string = client.session.save()
+            
+            # Save to database
+            self.supabase.save_telegram_session(
+                user_info.get('id'),
+                session_data['phone_number'],
+                session_string
+            )
+            
+            # Get account info
+            me = await client.get_me()
+            
+            # Cleanup
+            await client.disconnect()
+            del login_sessions[login_id]
+            
+            return f"""
+✅ <b>Login Successful!</b>
+
+🔐 <b>2FA verified successfully!</b>
+
+👤 <b>Account:</b> {me.first_name} {me.last_name or ''}
+📱 <b>Phone:</b> +{session_data['phone_number']}
+🆔 <b>Username:</b> @{me.username or 'N/A'}
+
+📊 <b>Manage accounts:</b> <code>/accounts</code>
+"""
+            
+        except Exception as e:
+            logger.error(f"Password error: {e}")
+            return f"❌ <b>Password verification failed:</b> {str(e)}"
+    
+    async def get_user_accounts(self, user_id):
+        """Get all logged in accounts for user"""
+        sessions = self.supabase.get_user_sessions(user_id)
+        accounts = []
+        
+        for session in sessions:
+            try:
+                client = await self.create_client(session['session_string'])
+                await client.connect()
                 
-            return response.json()
-            
-        except Exception as e:
-            logger.error(f"Error getting categories: {e}")
-            return []
-
-    def create_category(self, user_id, category_name, color='#000000'):
-        """Create a new category"""
+                me = await client.get_me()
+                accounts.append({
+                    'phone': session['phone_number'],
+                    'name': f"{me.first_name} {me.last_name or ''}",
+                    'username': me.username,
+                    'session_id': session['id'],
+                    'client': client
+                })
+                
+            except Exception as e:
+                logger.error(f"Error loading session {session['phone_number']}: {e}")
+                # Deactivate invalid session
+                self.supabase.deactivate_session(session['id'], user_id)
+        
+        return accounts
+    
+    async def send_message_via_account(self, user_id, phone_number, target, message):
+        """Send message using specific account"""
+        session = self.supabase.get_session_by_phone(user_id, phone_number)
+        if not session:
+            return False, "❌ <b>Account not found!</b>"
+        
         try:
-            category_id = generate_id(6)
-            response = requests.post(
-                f"{self.base_url}/rest/v1/note_categories",
-                headers={
-                    'apikey': self.api_key,
-                    'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {self.api_key}',
-                    'Prefer': 'resolution=merge-duplicates'
-                },
-                json={
-                    'id': category_id,
-                    'user_id': user_id,
-                    'category_name': category_name,
-                    'color': color
-                }
-            )
+            client = await self.create_client(session['session_string'])
+            await client.connect()
             
-            return response.ok
+            # Send message
+            result = await client.send_message(target, message)
+            
+            await client.disconnect()
+            return True, f"✅ <b>Message sent via {phone_number}</b>"
             
         except Exception as e:
-            logger.error(f"Error creating category: {e}")
-            return False
+            logger.error(f"Send message error: {e}")
+            return False, f"❌ <b>Failed to send:</b> {str(e)}"
 
-# Global Supabase client
+# Global instances
 supabase = SupabaseClient()
+telegram_manager = TelegramAccountManager()
 
-class User:
+class Bot:
     @staticmethod
-    def save_note(user_id, username, title, content, category='general'):
-        """Save user note"""
-        return supabase.save_note(user_id, username, title, content, category)
-
-    @staticmethod
-    def get_notes(user_id, page=1, limit=10, category=None):
-        """Get user notes"""
-        return supabase.get_user_notes(user_id, page, limit, category)
-
-    @staticmethod
-    def get_note(note_id):
-        """Get specific note"""
-        return supabase.get_note_by_id(note_id)
-
-    @staticmethod
-    def delete_note(note_id, user_id):
-        """Delete note"""
-        return supabase.delete_note(note_id, user_id)
+    def runCommand(command_name, user_info=None, chat_id=None, message_text=None):
+        """Run a specific command immediately"""
+        try:
+            if command_name.startswith('/'):
+                command_name = command_name[1:]
+            
+            if f"/{command_name}" in command_handlers:
+                handler = command_handlers[f"/{command_name}"]
+                return handler(user_info, chat_id, message_text or "")
+            else:
+                return f"❌ Command '{command_name}' not found"
+        except Exception as e:
+            logger.error(f"Error running command {command_name}: {e}")
+            return f"❌ Error executing command: {str(e)}"
 
     @staticmethod
-    def update_note(note_id, user_id, **kwargs):
-        """Update note"""
-        return supabase.update_note(note_id, user_id, **kwargs)
-
-    @staticmethod
-    def get_categories(user_id):
-        """Get user categories"""
-        return supabase.get_categories(user_id)
-
-    @staticmethod
-    def create_category(user_id, category_name, color='#000000'):
-        """Create category"""
-        return supabase.create_category(user_id, category_name, color)
+    def handleNextCommand(command_name, user_info, chat_id):
+        """Set up next command handler"""
+        user_id = user_info.get('id')
+        
+        if command_name.startswith('/'):
+            command_name = command_name[1:]
+            
+        next_command_handlers[user_id] = {
+            'command': command_name,
+            'timestamp': datetime.now().isoformat(),
+            'user_info': user_info,
+            'chat_id': chat_id
+        }
+        return f"🔄 Waiting for your input for command: {command_name}..."
 
 def auto_discover_handlers():
-    """Automatically discover all handler modules - filename as command"""
+    """Automatically discover all handler modules"""
     handlers = {}
     
     try:
@@ -341,12 +441,11 @@ def auto_discover_handlers():
         if os.path.exists(handlers_path):
             for filename in os.listdir(handlers_path):
                 if filename.endswith('.py') and filename != '__init__.py':
-                    command_name = filename[:-3]  # Remove .py
+                    command_name = filename[:-3]
                     
                     logger.info(f"📁 Found handler file: {filename} -> /{command_name}")
                     
                     try:
-                        # Use importlib to import module
                         spec = importlib.util.spec_from_file_location(
                             command_name, 
                             os.path.join(handlers_path, filename)
@@ -354,7 +453,6 @@ def auto_discover_handlers():
                         module = importlib.util.module_from_spec(spec)
                         spec.loader.exec_module(module)
                         
-                        # Use the main function (handle function)
                         if hasattr(module, 'handle'):
                             handlers[f"/{command_name}"] = module.handle
                             logger.info(f"✅ Auto-loaded command: /{command_name}")
@@ -394,10 +492,10 @@ logger.info(f"📋 Available commands: {list(command_handlers.keys())}")
 def setup_tables():
     """Setup database tables when app starts"""
     try:
-        logger.info("🔄 Setting up database tables...")
-        result = supabase.create_user_notes_tables()
+        logger.info("🔄 Setting up telegram sessions tables...")
+        result = supabase.create_telegram_sessions_table()
         if result:
-            logger.info("✅ User notes tables setup completed")
+            logger.info("✅ Telegram sessions tables setup completed")
         else:
             logger.warning("⚠️ Table setup may have failed - check Supabase connection")
     except Exception as e:
@@ -422,10 +520,10 @@ def handle_request():
 
         if request.method == 'GET':
             return jsonify({
-                'status': '✅ Bot is running with NOTES SYSTEM',
+                'status': '✅ Telegram Account Manager is running',
                 'available_commands': list(command_handlers.keys()),
                 'total_commands': len(command_handlers),
-                'active_sessions': len(next_command_handlers),
+                'active_login_sessions': len(login_sessions),
                 'timestamp': datetime.now().isoformat()
             })
 
@@ -443,7 +541,7 @@ def handle_request():
                 
                 logger.info(f"📩 Message from {user_info.get('first_name')}: {message_text}")
                 
-                # Check for next command handler first (waits for user input)
+                # Check for next command handler first
                 if user_id in next_command_handlers:
                     next_command_data = next_command_handlers.pop(user_id)
                     command_name = next_command_data['command']
@@ -468,15 +566,15 @@ def handle_request():
                             return jsonify(send_telegram_message(chat_id, error_msg))
                 
                 # Default response for unknown commands
-                available_commands = "\n".join([f"• <b>{cmd}</b>" for cmd in command_handlers.keys()])
+                available_commands = "\n".join([f"• <code>{cmd}</code>" for cmd in command_handlers.keys()])
                 if available_commands:
                     response_text = f"""
-❌ <b>Unknown Command:</b> <b>{message_text}</b>
+❌ <b>Unknown Command:</b> <code>{message_text}</code>
 
 📋 <b>Available Commands:</b>
 {available_commands}
 
-💡 <b>Help:</b> <b>/help</b>
+💡 <b>Help:</b> <code>/help</code>
 """
                 else:
                     response_text = "❌ <b>No commands loaded!</b> Check server logs."
@@ -495,11 +593,11 @@ def health_check():
         'status': 'healthy', 
         'total_commands': len(command_handlers),
         'commands': list(command_handlers.keys()),
-        'active_sessions': len(next_command_handlers),
+        'active_login_sessions': len(login_sessions),
         'timestamp': datetime.now().isoformat()
     }), 200
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))
-    logger.info(f"🚀 Starting bot on port {port} with {len(command_handlers)} commands")
+    logger.info(f"🚀 Starting Telegram Account Manager on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
