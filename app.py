@@ -59,11 +59,14 @@ class Bot:
 class User:
     @staticmethod
     def save_data(user_id, variable, value, user_info=None):
-        """Save data for specific user using actual table names"""
+        """Save data for specific user using actual table names - FIXED"""
         try:
+            # Convert user_id to string for TEXT field
+            user_id_str = str(user_id)
+            
             # Step 1: Save to webhook_users table
             user_data = {
-                "user_id": str(user_id),  # Convert to string for TEXT field
+                "user_id": user_id_str,
                 "updated_at": datetime.now().isoformat()
             }
             
@@ -97,7 +100,7 @@ class User:
             }
             
             data_payload = {
-                "user_id": str(user_id),  # Convert to string
+                "user_id": user_id_str,
                 "variable": variable,
                 "value": value,
                 "updated_at": datetime.now().isoformat()
@@ -110,15 +113,17 @@ class User:
                 timeout=10
             )
             
-            print(f"🔍 [BOT_DATA_SAVE] Status: {data_response.status_code}")
+            print(f"🔍 [BOT_DATA_SAVE] Status: {data_response.status_code}, Response: {data_response.text}")
             
-            # Update local cache
+            # Update local cache regardless of API response
             if user_id not in user_sessions:
                 user_sessions[user_id] = {}
             user_sessions[user_id][variable] = value
             
             if data_response.status_code in [200, 201, 204]:
-                return "✅ Data saved to bot_data table"
+                return "✅ Data saved successfully"
+            elif data_response.status_code == 400:
+                return "⚠️ Bad Request - Check table structure"
             else:
                 return f"⚠️ API returned: {data_response.status_code}"
                 
@@ -128,7 +133,7 @@ class User:
 
     @staticmethod
     def get_data(user_id, variable):
-        """Get data from bot_data table"""
+        """Get data from bot_data table - FIXED"""
         try:
             # Check local cache first
             if user_id in user_sessions and variable in user_sessions[user_id]:
@@ -242,7 +247,7 @@ def handle_request():
 
         if request.method == 'GET':
             return jsonify({
-                'status': '✅ Bot is running with FILE-BASED COMMANDS',
+                'status': '✅ Bot is running with ACTUAL TABLE NAMES',
                 'available_commands': list(command_handlers.keys()),
                 'total_commands': len(command_handlers),
                 'active_sessions': len(next_command_handlers),
@@ -288,15 +293,15 @@ def handle_request():
                             return jsonify(send_telegram_message(chat_id, error_msg))
                 
                 # Default response for unknown commands
-                available_commands = "\n".join([f"• <b>{cmd}</b>" for cmd in command_handlers.keys()])
+                available_commands = "\n".join([f"• <code>{cmd}</code>" for cmd in command_handlers.keys()])
                 if available_commands:
                     response_text = f"""
-❌ <b>Unknown Command:</b> <b>{message_text}</b>
+❌ <b>Unknown Command:</b> <code>{message_text}</code>
 
 📋 <b>Available Commands:</b>
 {available_commands}
 
-💡 <b>Help:</b> <b>/help</b>
+💡 <b>Help:</b> <code>/help</code>
 """
                 else:
                     response_text = "❌ <b>No commands loaded!</b> Check server logs."
