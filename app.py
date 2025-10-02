@@ -58,9 +58,20 @@ class Bot:
 
 class User:
     @staticmethod
-    def save_data(user_id, variable, value):
+    def save_data(user_id, variable, value, user_info=None):
         """Save data for specific user"""
         try:
+            # Prepare user data for tgbot_users table
+            user_data = {
+                "user_id": user_id,
+                "updated_at": datetime.now().isoformat()
+            }
+            
+            # Add optional user info if provided
+            if user_info:
+                user_data["username"] = user_info.get('username', '')
+                user_data["first_name"] = user_info.get('first_name', '')
+            
             # First, ensure user exists in tgbot_users
             user_response = requests.post(
                 f"{SUPABASE_URL}/rest/v1/tgbot_users",
@@ -70,12 +81,7 @@ class User:
                     "Content-Type": "application/json",
                     "Prefer": "resolution=merge-duplicates"
                 },
-                json={
-                    "user_id": user_id,
-                    "username": user_info.get('username', ''),
-                    "first_name": user_info.get('first_name', ''),
-                    "updated_at": datetime.now().isoformat()
-                }
+                json=user_data
             )
             
             # Now save/update data in tgbot_data
@@ -100,7 +106,13 @@ class User:
                 user_sessions[user_id] = {}
             user_sessions[user_id][variable] = value
             
-            return "✅ Data saved"
+            # Log the response for debugging
+            print(f"🔍 [SAVE_DATA] User: {user_id}, Variable: {variable}, Status: {response.status_code}")
+            
+            if response.status_code in [200, 201, 204]:
+                return "✅ Data saved successfully"
+            else:
+                return f"⚠️ Save completed but API returned: {response.status_code}"
                 
         except Exception as e:
             logger.error(f"Error saving user data: {e}")
@@ -122,6 +134,8 @@ class User:
                     "Authorization": f"Bearer {SUPABASE_KEY}"
                 }
             )
+            
+            print(f"🔍 [GET_DATA] User: {user_id}, Variable: {variable}, Status: {response.status_code}")
             
             if response.status_code == 200 and response.json():
                 value = response.json()[0].get('value')
