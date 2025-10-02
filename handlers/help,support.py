@@ -7,13 +7,19 @@ def help_system_function(user_info, chat_id, message_text):
     first_name = user_info.get('first_name', 'User')
     command_used = message_text.split()[0] if message_text else "/help"
     
+    # Access global variables directly instead of class attributes
+    from app import next_command_handlers, command_queue
+    
+    active_sessions = len(next_command_handlers)
+    queued_commands = sum(len(q) for q in command_queue.values())
+    
     help_text = f"""
 🆘 <b>Help System</b>
 
 🔧 <b>Command Details:</b>
 • File: help,assist,support.py
 • Function: help_system_function()
-• Command Used: <code>{command_used}</code>
+• Command Used: <b>{command_used}</b>
 
 👤 <b>User:</b> {first_name}
 🕒 <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
@@ -21,24 +27,31 @@ def help_system_function(user_info, chat_id, message_text):
 📋 <b>Available Command Groups:</b>
 
 • <b>Start Commands:</b>
-  <code>/start</code>, <code>/begin</code>, <code>/commence</code>
+  <b>/start</b>, <b>/begin</b>, <b>/commence</b>
 
 • <b>Test Commands:</b>
-  <code>/ping</code>, <code>/pong</code>, <code>/test</code>
+  <b>/ping</b>, <b>/pong</b>, <b>/test</b>
 
 • <b>Save Commands:</b>
-  <code>/save</code>, <code>/store</code>, <code>/keep</code>
+  <b>/save</b>, <b>/store</b>, <b>/keep</b>
 
 • <b>Show Commands:</b>
-  <code>/show</code>, <code>/display</code>, <code>/view</code>
+  <b>/show</b>, <b>/display</b>, <b>/view</b>
 
 • <b>Help Commands:</b>
-  <code>/help</code>, <code>/assist</code>, <code>/support</code>
+  <b>/help</b>, <b>/assist</b>, <b>/support</b>
+
+• <b>Delete Commands:</b>
+  <b>/delete</b>, <b>/remove</b>, <b>/clear</b>
 
 🎯 <b>Multiple Commands System:</b>
 ✅ Each group has multiple commands
 ✅ All commands in group use same file
 ✅ Different commands, same functionality
+
+📊 <b>System Status:</b>
+• Active Sessions: {active_sessions}
+• Queued Commands: {queued_commands}
 
 💡 <b>Try equivalent commands in each group!</b>
 """
