@@ -25,6 +25,10 @@ next_command_handlers = {}
 command_queue = {}
 
 class Bot:
+    # Class attributes to access global variables
+    next_command_handlers = next_command_handlers
+    command_queue = command_queue
+    
     @staticmethod
     def runCommand(command_name, user_info=None, chat_id=None, message_text=None):
         """Run a specific command immediately - continues execution"""
@@ -60,9 +64,9 @@ class Bot:
         
         # Return current response + waiting message
         if current_response:
-            return current_response + f"\n\n🔄 Waiting for your input to continue with <code>/{command_name}</code>..."
+            return current_response + f"\n\n🔄 Waiting for your input to continue with <b>/{command_name}</b>..."
         else:
-            return f"🔄 Waiting for your input to continue with <code>/{command_name}</code>..."
+            return f"🔄 Waiting for your input to continue with <b>/{command_name}</b>..."
 
     @staticmethod
     def queueCommand(command_name, user_info, chat_id):
@@ -102,6 +106,110 @@ class Bot:
             
             return "\n\n".join(results)
         return None
+
+    @staticmethod
+    def save_data(variable, value):
+        """Save data for all users (bot-wide)"""
+        try:
+            response = requests.post(
+                f"{SUPABASE_URL}/rest/v1/bot_data",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": "application/json",
+                    "Prefer": "return=minimal"
+                },
+                json={
+                    "variable": variable,
+                    "value": value,
+                    "created_at": datetime.now().isoformat()
+                }
+            )
+            bot_data[variable] = value
+            return f"✅ Bot data saved: {variable} = {value}"
+        except Exception as e:
+            logger.error(f"Error saving bot data: {e}")
+            return f"❌ Error saving bot data: {str(e)}"
+
+class User:
+    @staticmethod
+    def save_data(user_id, variable, value):
+        """Save data for specific user using new table structure"""
+        try:
+            # First, ensure user exists in tgbot_users
+            user_response = requests.post(
+                f"{SUPABASE_URL}/rest/v1/tgbot_users",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": "application/json",
+                    "Prefer": "resolution=merge-duplicates"
+                },
+                json={
+                    "user_id": user_id,
+                    "updated_at": datetime.now().isoformat()
+                }
+            )
+            
+            # Now save/update data in tgbot_data
+            response = requests.post(
+                f"{SUPABASE_URL}/rest/v1/tgbot_data",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": "application/json", 
+                    "Prefer": "resolution=merge-duplicates"
+                },
+                json={
+                    "user_id": user_id,
+                    "variable": variable,
+                    "value": value,
+                    "updated_at": datetime.now().isoformat()
+                }
+            )
+            
+            if response.status_code in [200, 201, 204]:
+                # Update local cache
+                if user_id not in user_sessions:
+                    user_sessions[user_id] = {}
+                user_sessions[user_id][variable] = value
+                return f"✅ Data saved: {variable}"
+            else:
+                return f"❌ Save failed: {response.status_code}"
+                
+        except Exception as e:
+            logger.error(f"Error saving user data: {e}")
+            return f"❌ Error: {str(e)}"
+
+    @staticmethod
+    def get_data(user_id, variable):
+        """Get data for specific user from new tables"""
+        try:
+            # Check local cache first
+            if user_id in user_sessions and variable in user_sessions[user_id]:
+                return user_sessions[user_id][variable]
+            
+            # Fetch from Supabase
+            response = requests.get(
+                f"{SUPABASE_URL}/rest/v1/tgbot_data?user_id=eq.{user_id}&variable=eq.{variable}",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}"
+                }
+            )
+            
+            if response.status_code == 200 and response.json():
+                value = response.json()[0].get('value')
+                # Update local cache
+                if user_id not in user_sessions:
+                    user_sessions[user_id] = {}
+                user_sessions[user_id][variable] = value
+                return value
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting user data: {e}")
+            return None
 
 def auto_discover_handlers():
     """Automatically discover all handler modules - MULTIPLE COMMANDS PER FILE"""
@@ -253,15 +361,15 @@ def handle_request():
                             return jsonify(send_telegram_message(chat_id, error_msg))
                 
                 # Default response for unknown commands
-                available_commands = "\n".join([f"• <code>{cmd}</code>" for cmd in command_handlers.keys()])
+                available_commands = "\n".join([f"• <b>{cmd}</b>" for cmd in command_handlers.keys()])
                 if available_commands:
                     response_text = f"""
-❌ <b>Unknown Command:</b> <code>{message_text}</code>
+❌ <b>Unknown Command:</b> <b>{message_text}</b>
 
 📋 <b>Available Commands:</b>
 {available_commands}
 
-💡 <b>Help:</b> <code>/help</code>
+💡 <b>Help:</b> <b>/help</b>
 """
                 else:
                     response_text = "❌ <b>No commands loaded!</b> Check server logs."
