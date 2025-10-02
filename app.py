@@ -22,7 +22,7 @@ user_sessions = {}
 bot_data = {}
 command_handlers = {}
 next_command_handlers = {}
-command_queue = {}  # New: For queuing commands
+command_queue = {}
 
 class Bot:
     @staticmethod
@@ -103,112 +103,8 @@ class Bot:
             return "\n\n".join(results)
         return None
 
-    @staticmethod
-    def save_data(variable, value):
-        """Save data for all users (bot-wide)"""
-        try:
-            response = requests.post(
-                f"{SUPABASE_URL}/rest/v1/bot_data",
-                headers={
-                    "apikey": SUPABASE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_KEY}",
-                    "Content-Type": "application/json",
-                    "Prefer": "return=minimal"
-                },
-                json={
-                    "variable": variable,
-                    "value": value,
-                    "created_at": datetime.now().isoformat()
-                }
-            )
-            bot_data[variable] = value
-            return f"✅ Bot data saved: {variable} = {value}"
-        except Exception as e:
-            logger.error(f"Error saving bot data: {e}")
-            return f"❌ Error saving bot data: {str(e)}"
-
-class User:
-    @staticmethod
-    def save_data(user_id, variable, value):
-        """Save data for specific user using new table structure"""
-        try:
-            # First, ensure user exists in tgbot_users
-            user_response = requests.post(
-                f"{SUPABASE_URL}/rest/v1/tgbot_users",
-                headers={
-                    "apikey": SUPABASE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_KEY}",
-                    "Content-Type": "application/json",
-                    "Prefer": "resolution=merge-duplicates"
-                },
-                json={
-                    "user_id": user_id,
-                    "updated_at": datetime.now().isoformat()
-                }
-            )
-            
-            # Now save/update data in tgbot_data
-            response = requests.post(
-                f"{SUPABASE_URL}/rest/v1/tgbot_data",
-                headers={
-                    "apikey": SUPABASE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_KEY}",
-                    "Content-Type": "application/json", 
-                    "Prefer": "resolution=merge-duplicates"
-                },
-                json={
-                    "user_id": user_id,
-                    "variable": variable,
-                    "value": value,
-                    "updated_at": datetime.now().isoformat()
-                }
-            )
-            
-            if response.status_code in [200, 201, 204]:
-                # Update local cache
-                if user_id not in user_sessions:
-                    user_sessions[user_id] = {}
-                user_sessions[user_id][variable] = value
-                return f"✅ Data saved: {variable}"
-            else:
-                return f"❌ Save failed: {response.status_code}"
-                
-        except Exception as e:
-            logger.error(f"Error saving user data: {e}")
-            return f"❌ Error: {str(e)}"
-
-    @staticmethod
-    def get_data(user_id, variable):
-        """Get data for specific user from new tables"""
-        try:
-            # Check local cache first
-            if user_id in user_sessions and variable in user_sessions[user_id]:
-                return user_sessions[user_id][variable]
-            
-            # Fetch from Supabase
-            response = requests.get(
-                f"{SUPABASE_URL}/rest/v1/tgbot_data?user_id=eq.{user_id}&variable=eq.{variable}",
-                headers={
-                    "apikey": SUPABASE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_KEY}"
-                }
-            )
-            
-            if response.status_code == 200 and response.json():
-                value = response.json()[0].get('value')
-                # Update local cache
-                if user_id not in user_sessions:
-                    user_sessions[user_id] = {}
-                user_sessions[user_id][variable] = value
-                return value
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error getting user data: {e}")
-            return None
-
 def auto_discover_handlers():
-    """Automatically discover all handler modules with FIXED import system"""
+    """Automatically discover all handler modules - MULTIPLE COMMANDS PER FILE"""
     handlers = {}
     
     try:
@@ -234,16 +130,23 @@ def auto_discover_handlers():
                         module = importlib.util.module_from_spec(spec)
                         spec.loader.exec_module(module)
                         
-                        # Handle multiple commands from filename (name1,name2,name3.py)
-                        command_names = module_name.split(',')
+                        # Get ALL functions from the module (not just handle_ prefixed)
+                        function_names = [name for name in dir(module) 
+                                       if not name.startswith('_') and callable(getattr(module, name))]
                         
-                        for command_name in command_names:
-                            function_name = f"handle_{command_name}"
-                            if hasattr(module, function_name):
-                                handlers[f"/{command_name}"] = getattr(module, function_name)
-                                logger.info(f"✅ Auto-loaded command: /{command_name}")
-                            else:
-                                logger.warning(f"⚠️ Function {function_name} not found in {module_name}")
+                        if function_names:
+                            # Use the first function found in the module
+                            first_function = function_names[0]
+                            handler_function = getattr(module, first_function)
+                            
+                            # Handle multiple commands from filename (name1,name2,name3.py)
+                            command_names = module_name.split(',')
+                            
+                            for command_name in command_names:
+                                handlers[f"/{command_name}"] = handler_function
+                                logger.info(f"✅ Auto-loaded command: /{command_name} -> {filename} -> {first_function}()")
+                        else:
+                            logger.warning(f"⚠️ No functions found in {module_name}")
                         
                     except Exception as e:
                         logger.error(f"❌ Error loading handler {module_name}: {e}")
@@ -291,7 +194,7 @@ def handle_request():
 
         if request.method == 'GET':
             return jsonify({
-                'status': '✅ Bot is running with COMMAND QUEUE SYSTEM',
+                'status': '✅ Bot is running with MULTIPLE COMMANDS PER FILE SYSTEM',
                 'available_commands': list(command_handlers.keys()),
                 'total_commands': len(command_handlers),
                 'active_sessions': len(next_command_handlers),
