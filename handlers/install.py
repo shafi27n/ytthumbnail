@@ -117,7 +117,15 @@ def test_database_connection(user_info):
     try:
         # Test 1: Save user data
         test_log += "\n💾 <b>Testing Data Save:</b>"
-        save_result = User.save_data(user_id, "install_test", f"Installation test at {datetime.now()}")
+        
+        # Create a simple user info dict for User.save_data
+        simple_user_info = {
+            'id': user_id,
+            'username': user_info.get('username', ''),
+            'first_name': first_name
+        }
+        
+        save_result = User.save_data(user_id, "install_test", f"Installation test at {datetime.now()}", simple_user_info)
         test_log += f"\n• Save Operation: {save_result}"
         
         # Test 2: Retrieve user data
@@ -127,11 +135,14 @@ def test_database_connection(user_info):
         
         # Test 3: Save multiple items
         test_log += "\n🔢 <b>Testing Multiple Items:</b>"
-        User.save_data(user_id, "test_counter", "1")
+        User.save_data(user_id, "test_counter", "1", simple_user_info)
         counter_data = User.get_data(user_id, "test_counter")
         test_log += f"\n• Counter Test: {'✅ Working' if counter_data == '1' else '❌ Failed'}"
         
-        test_log += "\n\n🎯 <b>All Database Tests Completed Successfully!</b>"
+        if retrieved_data and counter_data == '1':
+            test_log += "\n\n🎯 <b>All Database Tests Completed Successfully!</b>"
+        else:
+            test_log += "\n\n⚠️ <b>Some tests failed, but installation completed</b>"
         
     except Exception as e:
         test_log += f"\n❌ <b>Database Test Failed:</b> {str(e)}"

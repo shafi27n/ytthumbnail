@@ -36,8 +36,8 @@ def handle(user_info, chat_id, message_text):
     
     items_list.append(new_item)
     
-    # Save updated list
-    result = User.save_data(user_id, "saved_items", json.dumps(items_list))
+    # Save updated list - pass user_info for user table
+    result = User.save_data(user_id, "saved_items", json.dumps(items_list), user_info)
     
     return f"""
 ✅ <b>Data Saved Successfully!</b>
@@ -50,4 +50,6 @@ def handle(user_info, chat_id, message_text):
 <b>{save_data}</b>
 
 🔍 <b>View with:</b> <b>/show</b>
+
+💾 <b>Save Result:</b> {result}
 """
