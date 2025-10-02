@@ -61,7 +61,7 @@ class User:
     def save_data(user_id, variable, value):
         """Save data for specific user"""
         try:
-            # First, ensure user exists
+            # First, ensure user exists in tgbot_users
             user_response = requests.post(
                 f"{SUPABASE_URL}/rest/v1/tgbot_users",
                 headers={
@@ -72,11 +72,13 @@ class User:
                 },
                 json={
                     "user_id": user_id,
+                    "username": user_info.get('username', ''),
+                    "first_name": user_info.get('first_name', ''),
                     "updated_at": datetime.now().isoformat()
                 }
             )
             
-            # Save/update data
+            # Now save/update data in tgbot_data
             response = requests.post(
                 f"{SUPABASE_URL}/rest/v1/tgbot_data",
                 headers={
@@ -93,13 +95,12 @@ class User:
                 }
             )
             
-            if response.status_code in [200, 201, 204]:
-                if user_id not in user_sessions:
-                    user_sessions[user_id] = {}
-                user_sessions[user_id][variable] = value
-                return f"✅ Data saved: {variable}"
-            else:
-                return f"❌ Save failed: {response.status_code}"
+            # Update local cache
+            if user_id not in user_sessions:
+                user_sessions[user_id] = {}
+            user_sessions[user_id][variable] = value
+            
+            return "✅ Data saved"
                 
         except Exception as e:
             logger.error(f"Error saving user data: {e}")
@@ -109,9 +110,11 @@ class User:
     def get_data(user_id, variable):
         """Get data for specific user"""
         try:
+            # Check local cache first
             if user_id in user_sessions and variable in user_sessions[user_id]:
                 return user_sessions[user_id][variable]
             
+            # Fetch from Supabase
             response = requests.get(
                 f"{SUPABASE_URL}/rest/v1/tgbot_data?user_id=eq.{user_id}&variable=eq.{variable}",
                 headers={
@@ -122,6 +125,7 @@ class User:
             
             if response.status_code == 200 and response.json():
                 value = response.json()[0].get('value')
+                # Update local cache
                 if user_id not in user_sessions:
                     user_sessions[user_id] = {}
                 user_sessions[user_id][variable] = value
