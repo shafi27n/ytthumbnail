@@ -59,60 +59,68 @@ class Bot:
 class User:
     @staticmethod
     def save_data(user_id, variable, value, user_info=None):
-        """Save data for specific user"""
+        """Save data for specific user using actual table names"""
         try:
-            # Prepare user data for tgbot_users table
+            # Step 1: Save to webhook_users table
             user_data = {
-                "user_id": user_id,
+                "user_id": str(user_id),  # Convert to string for TEXT field
                 "updated_at": datetime.now().isoformat()
             }
             
-            # Add optional user info if provided
             if user_info:
                 user_data["username"] = user_info.get('username', '')
                 user_data["first_name"] = user_info.get('first_name', '')
             
-            # First, ensure user exists in tgbot_users
+            user_headers = {
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "resolution=merge-duplicates"
+            }
+            
+            # Upsert user to webhook_users
             user_response = requests.post(
-                f"{SUPABASE_URL}/rest/v1/tgbot_users",
-                headers={
-                    "apikey": SUPABASE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_KEY}",
-                    "Content-Type": "application/json",
-                    "Prefer": "resolution=merge-duplicates"
-                },
-                json=user_data
+                f"{SUPABASE_URL}/rest/v1/webhook_users",
+                headers=user_headers,
+                json=user_data,
+                timeout=10
             )
             
-            # Now save/update data in tgbot_data
-            response = requests.post(
-                f"{SUPABASE_URL}/rest/v1/tgbot_data",
-                headers={
-                    "apikey": SUPABASE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_KEY}",
-                    "Content-Type": "application/json", 
-                    "Prefer": "resolution=merge-duplicates"
-                },
-                json={
-                    "user_id": user_id,
-                    "variable": variable,
-                    "value": value,
-                    "updated_at": datetime.now().isoformat()
-                }
+            print(f"🔍 [WEBHOOK_USERS] Status: {user_response.status_code}")
+            
+            # Step 2: Save data to bot_data table
+            data_headers = {
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "resolution=merge-duplicates"
+            }
+            
+            data_payload = {
+                "user_id": str(user_id),  # Convert to string
+                "variable": variable,
+                "value": value,
+                "updated_at": datetime.now().isoformat()
+            }
+            
+            data_response = requests.post(
+                f"{SUPABASE_URL}/rest/v1/bot_data",
+                headers=data_headers,
+                json=data_payload,
+                timeout=10
             )
+            
+            print(f"🔍 [BOT_DATA_SAVE] Status: {data_response.status_code}")
             
             # Update local cache
             if user_id not in user_sessions:
                 user_sessions[user_id] = {}
             user_sessions[user_id][variable] = value
             
-            # Log the response for debugging
-            print(f"🔍 [SAVE_DATA] User: {user_id}, Variable: {variable}, Status: {response.status_code}")
-            
-            if response.status_code in [200, 201, 204]:
-                return "✅ Data saved successfully"
+            if data_response.status_code in [200, 201, 204]:
+                return "✅ Data saved to bot_data table"
             else:
-                return f"⚠️ Save completed but API returned: {response.status_code}"
+                return f"⚠️ API returned: {data_response.status_code}"
                 
         except Exception as e:
             logger.error(f"Error saving user data: {e}")
@@ -120,22 +128,26 @@ class User:
 
     @staticmethod
     def get_data(user_id, variable):
-        """Get data for specific user"""
+        """Get data from bot_data table"""
         try:
             # Check local cache first
             if user_id in user_sessions and variable in user_sessions[user_id]:
                 return user_sessions[user_id][variable]
             
-            # Fetch from Supabase
+            # Fetch from bot_data table
+            headers = {
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "application/json"
+            }
+            
             response = requests.get(
-                f"{SUPABASE_URL}/rest/v1/tgbot_data?user_id=eq.{user_id}&variable=eq.{variable}",
-                headers={
-                    "apikey": SUPABASE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_KEY}"
-                }
+                f"{SUPABASE_URL}/rest/v1/bot_data?user_id=eq.{user_id}&variable=eq.{variable}",
+                headers=headers,
+                timeout=10
             )
             
-            print(f"🔍 [GET_DATA] User: {user_id}, Variable: {variable}, Status: {response.status_code}")
+            print(f"🔍 [BOT_DATA_GET] Status: {response.status_code}")
             
             if response.status_code == 200 and response.json():
                 value = response.json()[0].get('value')
@@ -144,6 +156,7 @@ class User:
                     user_sessions[user_id] = {}
                 user_sessions[user_id][variable] = value
                 return value
+            
             return None
             
         except Exception as e:
