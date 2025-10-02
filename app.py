@@ -17,40 +17,91 @@ logger = logging.getLogger(__name__)
 SUPABASE_URL = 'https://megohojyelqspypejlpo.supabase.co'
 SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1lZ29ob2p5ZWxxc3B5cGVqbHBvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTIzMjQxMDAsImV4cCI6MjA2NzkwMDEwMH0.d3qS8Z0ihWXubYp7kYLsGc0qEpDC1iOdxK9QdfozXwo'
 
-# Add this with other global storage variables
-#elegram_sessions = {}  # Add this line
-
 # Global storage
 user_sessions = {}
 bot_data = {}
 command_handlers = {}
 next_command_handlers = {}
-telegram_sessions = {}  # Add this for Telegram sessions
+command_queue = {}  # New: For queuing commands
 
 class Bot:
     @staticmethod
     def runCommand(command_name, user_info=None, chat_id=None, message_text=None):
-        """Run a specific command immediately"""
+        """Run a specific command immediately - continues execution"""
         try:
+            logger.info(f"🚀 Executing immediate command: {command_name}")
+            
             if command_name in command_handlers:
-                return command_handlers[command_name](user_info, chat_id, message_text)
+                result = command_handlers[command_name](user_info, chat_id, message_text)
+                logger.info(f"✅ Command {command_name} executed successfully")
+                return result
             else:
-                return f"❌ Command '{command_name}' not found"
+                error_msg = f"❌ Command '{command_name}' not found"
+                logger.warning(error_msg)
+                return error_msg
         except Exception as e:
-            logger.error(f"Error running command {command_name}: {e}")
-            return f"❌ Error executing command: {str(e)}"
+            error_msg = f"❌ Error executing command {command_name}: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
 
     @staticmethod
-    def handleNextCommand(command_name, user_info, chat_id):
-        """Set up next command handler for user response"""
+    def handleNextCommand(command_name, user_info, chat_id, current_response=""):
+        """Set up next command handler for user response - pauses execution"""
         user_id = user_info.get('id')
+        
+        logger.info(f"⏳ Setting up next command: {command_name} for user {user_id}")
+        
         next_command_handlers[user_id] = {
             'command': command_name,
             'timestamp': datetime.now().isoformat(),
             'user_info': user_info,
             'chat_id': chat_id
         }
-        return "🔄 Waiting for your response..."
+        
+        # Return current response + waiting message
+        if current_response:
+            return current_response + f"\n\n🔄 Waiting for your input to continue with <code>/{command_name}</code>..."
+        else:
+            return f"🔄 Waiting for your input to continue with <code>/{command_name}</code>..."
+
+    @staticmethod
+    def queueCommand(command_name, user_info, chat_id):
+        """Queue a command to run after current execution"""
+        user_id = user_info.get('id')
+        
+        if user_id not in command_queue:
+            command_queue[user_id] = []
+        
+        command_queue[user_id].append({
+            'command': command_name,
+            'user_info': user_info,
+            'chat_id': chat_id,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+        logger.info(f"📥 Queued command: {command_name} for user {user_id}")
+
+    @staticmethod
+    def processQueuedCommands(user_id, chat_id):
+        """Process all queued commands for a user"""
+        if user_id in command_queue and command_queue[user_id]:
+            results = []
+            for queued in command_queue[user_id]:
+                try:
+                    result = Bot.runCommand(
+                        queued['command'],
+                        queued['user_info'],
+                        queued['chat_id']
+                    )
+                    results.append(result)
+                except Exception as e:
+                    results.append(f"❌ Error in queued command {queued['command']}: {str(e)}")
+            
+            # Clear the queue
+            command_queue[user_id] = []
+            
+            return "\n\n".join(results)
+        return None
 
     @staticmethod
     def save_data(variable, value):
@@ -79,48 +130,79 @@ class Bot:
 class User:
     @staticmethod
     def save_data(user_id, variable, value):
-        """Save data for specific user"""
+        """Save data for specific user using new table structure"""
         try:
-            response = requests.post(
-                f"{SUPABASE_URL}/rest/v1/user_data",
+            # First, ensure user exists in tgbot_users
+            user_response = requests.post(
+                f"{SUPABASE_URL}/rest/v1/tgbot_users",
                 headers={
                     "apikey": SUPABASE_KEY,
                     "Authorization": f"Bearer {SUPABASE_KEY}",
                     "Content-Type": "application/json",
-                    "Prefer": "return=minimal"
+                    "Prefer": "resolution=merge-duplicates"
+                },
+                json={
+                    "user_id": user_id,
+                    "updated_at": datetime.now().isoformat()
+                }
+            )
+            
+            # Now save/update data in tgbot_data
+            response = requests.post(
+                f"{SUPABASE_URL}/rest/v1/tgbot_data",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": "application/json", 
+                    "Prefer": "resolution=merge-duplicates"
                 },
                 json={
                     "user_id": user_id,
                     "variable": variable,
                     "value": value,
-                    "created_at": datetime.now().isoformat()
+                    "updated_at": datetime.now().isoformat()
                 }
             )
-            if user_id not in user_sessions:
-                user_sessions[user_id] = {}
-            user_sessions[user_id][variable] = value
-            return f"✅ User data saved: {variable} = {value}"
+            
+            if response.status_code in [200, 201, 204]:
+                # Update local cache
+                if user_id not in user_sessions:
+                    user_sessions[user_id] = {}
+                user_sessions[user_id][variable] = value
+                return f"✅ Data saved: {variable}"
+            else:
+                return f"❌ Save failed: {response.status_code}"
+                
         except Exception as e:
             logger.error(f"Error saving user data: {e}")
-            return f"❌ Error saving user data: {str(e)}"
+            return f"❌ Error: {str(e)}"
 
     @staticmethod
     def get_data(user_id, variable):
-        """Get data for specific user"""
+        """Get data for specific user from new tables"""
         try:
+            # Check local cache first
             if user_id in user_sessions and variable in user_sessions[user_id]:
                 return user_sessions[user_id][variable]
             
+            # Fetch from Supabase
             response = requests.get(
-                f"{SUPABASE_URL}/rest/v1/user_data?user_id=eq.{user_id}&variable=eq.{variable}",
+                f"{SUPABASE_URL}/rest/v1/tgbot_data?user_id=eq.{user_id}&variable=eq.{variable}",
                 headers={
                     "apikey": SUPABASE_KEY,
                     "Authorization": f"Bearer {SUPABASE_KEY}"
                 }
             )
+            
             if response.status_code == 200 and response.json():
-                return response.json()[0].get('value')
+                value = response.json()[0].get('value')
+                # Update local cache
+                if user_id not in user_sessions:
+                    user_sessions[user_id] = {}
+                user_sessions[user_id][variable] = value
+                return value
             return None
+            
         except Exception as e:
             logger.error(f"Error getting user data: {e}")
             return None
@@ -187,20 +269,6 @@ def send_telegram_message(chat_id, text, parse_mode='HTML', reply_markup=None):
         
     return message_data
 
-def create_keyboard(buttons, resize_keyboard=True, one_time_keyboard=False):
-    """Create reply keyboard markup"""
-    return {
-        'keyboard': buttons,
-        'resize_keyboard': resize_keyboard,
-        'one_time_keyboard': one_time_keyboard
-    }
-
-def create_inline_keyboard(buttons):
-    """Create inline keyboard markup"""
-    return {
-        'inline_keyboard': buttons
-    }
-
 # Initialize command handlers on startup
 command_handlers = auto_discover_handlers()
 logger.info(f"🎯 Total commands loaded: {len(command_handlers)}")
@@ -223,10 +291,11 @@ def handle_request():
 
         if request.method == 'GET':
             return jsonify({
-                'status': '✅ Bot is running with FIXED AUTO-COMMAND LOADING',
+                'status': '✅ Bot is running with COMMAND QUEUE SYSTEM',
                 'available_commands': list(command_handlers.keys()),
                 'total_commands': len(command_handlers),
                 'active_sessions': len(next_command_handlers),
+                'queued_commands': sum(len(q) for q in command_queue.values()),
                 'timestamp': datetime.now().isoformat()
             })
 
@@ -244,18 +313,30 @@ def handle_request():
                 
                 logger.info(f"📩 Message from {user_info.get('first_name')}: {message_text}")
                 
-                # Check for next command handler first
+                # Check for next command handler first (paused execution)
                 if user_id in next_command_handlers:
                     next_command_data = next_command_handlers.pop(user_id)
                     command_name = next_command_data['command']
                     
                     if command_name in command_handlers:
+                        logger.info(f"🔄 Resuming paused command: {command_name}")
                         response_text = command_handlers[command_name](
                             next_command_data['user_info'], 
                             next_command_data['chat_id'], 
                             message_text
                         )
+                        
+                        # Process any queued commands after resuming
+                        queued_result = Bot.processQueuedCommands(user_id, chat_id)
+                        if queued_result:
+                            response_text += f"\n\n{queued_result}"
+                            
                         return jsonify(send_telegram_message(chat_id, response_text))
+                
+                # Process queued commands if any
+                queued_result = Bot.processQueuedCommands(user_id, chat_id)
+                if queued_result:
+                    return jsonify(send_telegram_message(chat_id, queued_result))
                 
                 # Handle regular commands
                 for command, handler in command_handlers.items():
@@ -284,21 +365,6 @@ def handle_request():
                     
                 return jsonify(send_telegram_message(chat_id, response_text))
             
-            # Handle callback queries (inline buttons)
-            elif 'callback_query' in update:
-                callback_query = update['callback_query']
-                chat_id = callback_query['message']['chat']['id']
-                user_info = callback_query['from']
-                data = callback_query['data']
-                
-                # Answer callback query first
-                requests.post(f"https://api.telegram.org/bot{token}/answerCallbackQuery", 
-                             json={'callback_query_id': callback_query['id']})
-                
-                # Handle callback data
-                response_text = f"🔄 Callback received: {data}"
-                return jsonify(send_telegram_message(chat_id, response_text))
-            
             return jsonify({'ok': True})
 
     except Exception as e:
@@ -312,6 +378,7 @@ def health_check():
         'total_commands': len(command_handlers),
         'commands': list(command_handlers.keys()),
         'active_sessions': len(next_command_handlers),
+        'queued_commands': sum(len(q) for q in command_queue.values()),
         'timestamp': datetime.now().isoformat()
     }), 200
 
