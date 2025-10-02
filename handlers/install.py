@@ -1,12 +1,10 @@
 import requests
 import json
 from datetime import datetime
-from app import User
+from app import User, SUPABASE_URL, SUPABASE_KEY
 
 def handle(user_info, chat_id, message_text):
     """Handle /install command - Install database tables with actual names"""
-    
-    from app import SUPABASE_URL, SUPABASE_KEY
     
     installation_log = f"""
 🗃️ <b>Database Installation</b> (via /install)
@@ -87,7 +85,7 @@ Creating actual database tables...
                         "Authorization": f"Bearer {SUPABASE_KEY}",
                         "Content-Type": "application/json"
                     },
-                    json={"sql": table['sql']},
+                    json={"query": table['sql']},
                     timeout=10
                 )
                 
@@ -152,13 +150,7 @@ def test_database_connection(user_info):
         # Test 1: Save user data to webhook_users
         test_log += "\n💾 <b>Testing User Data Save:</b>"
         
-        simple_user_info = {
-            'id': user_id,
-            'username': user_info.get('username', ''),
-            'first_name': first_name
-        }
-        
-        save_result = User.save_data(user_id, "install_test", f"Installation test at {datetime.now()}", simple_user_info)
+        save_result = User.save_data(user_id, "install_test", f"Installation test at {datetime.now()}", user_info)
         test_log += f"\n• Save Operation: {save_result}"
         
         # Test 2: Retrieve user data
@@ -168,7 +160,6 @@ def test_database_connection(user_info):
         
         # Test 3: Test webhook_users table
         test_log += "\n\n👤 <b>Testing Webhook Users Table:</b>"
-        from app import SUPABASE_URL, SUPABASE_KEY
         
         try:
             users_response = requests.get(
@@ -179,7 +170,10 @@ def test_database_connection(user_info):
                 }
             )
             if users_response.status_code == 200:
-                test_log += f"\n• webhook_users: ✅ Accessible ({len(users_response.json())} records)"
+                user_data = users_response.json()
+                test_log += f"\n• webhook_users: ✅ Accessible ({len(user_data)} records)"
+                if user_data:
+                    test_log += f"\n• Your username: {user_data[0].get('username', 'Not set')}"
             else:
                 test_log += f"\n• webhook_users: ❌ Inaccessible ({users_response.status_code})"
         except Exception as e:
@@ -196,7 +190,8 @@ def test_database_connection(user_info):
                 }
             )
             if bot_data_response.status_code == 200:
-                test_log += f"\n• bot_data: ✅ Accessible ({len(bot_data_response.json())} records)"
+                bot_data = bot_data_response.json()
+                test_log += f"\n• bot_data: ✅ Accessible ({len(bot_data)} records)"
             else:
                 test_log += f"\n• bot_data: ❌ Inaccessible ({bot_data_response.status_code})"
         except Exception as e:

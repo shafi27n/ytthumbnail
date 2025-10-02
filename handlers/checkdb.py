@@ -1,10 +1,9 @@
 import requests
 from datetime import datetime
+from app import User, SUPABASE_URL, SUPABASE_KEY
 
 def handle(user_info, chat_id, message_text):
-    """Handle /checkdb command - Check actual database tables"""
-    
-    from app import SUPABASE_URL, SUPABASE_KEY, User
+    """Handle /checkdb command - Check actual database tables - FIXED"""
     
     user_id = user_info.get('id')
     
@@ -39,7 +38,7 @@ Checking actual Supabase tables...
                 if response.status_code == 200:
                     # Get row count
                     count_response = requests.get(
-                        f"{SUPABASE_URL}/rest/v1/{table_name}?select=id",
+                        f"{SUPABASE_URL}/rest/v1/{table_name}",
                         headers={
                             "apikey": SUPABASE_KEY,
                             "Authorization": f"Bearer {SUPABASE_KEY}"
